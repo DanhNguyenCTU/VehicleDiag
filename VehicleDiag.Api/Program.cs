@@ -1,9 +1,10 @@
-using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using VehicleDiag.Api.Data;
 using Microsoft.OpenApi.Models;
+using System.Text;
+using VehicleDiag.Api.Data;
+using VehicleDiag.Api.Services;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -69,6 +70,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddHostedService<MqttBackgroundService>();
 
 var app = builder.Build();
 

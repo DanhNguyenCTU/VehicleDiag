@@ -45,8 +45,8 @@ builder.Services.AddSwaggerGen(c =>
 
 
 // EF Core
-builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+//builder.Services.AddDbContext<AppDbContext>(opt =>
+    //opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
 
 // JWT
 var jwtKey = builder.Configuration["Jwt:Key"]!;

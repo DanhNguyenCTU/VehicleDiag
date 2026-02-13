@@ -10,6 +10,7 @@ public class MqttBackgroundService : BackgroundService
 {
     private readonly IConfiguration _config;
     private IMqttClient? _mqttClient;
+    private IMqttClientOptions? _options;
 
     public MqttBackgroundService(IConfiguration config)
     {
@@ -21,6 +22,7 @@ public class MqttBackgroundService : BackgroundService
         var factory = new MqttFactory();
         _mqttClient = factory.CreateMqttClient();
 
+        // ===== Message Handler =====
         _mqttClient.UseApplicationMessageReceivedHandler(e =>
         {
             var payload = Encoding.UTF8.GetString(e.ApplicationMessage.Payload);
@@ -37,14 +39,12 @@ public class MqttBackgroundService : BackgroundService
                         PropertyNameCaseInsensitive = true
                     });
 
-
                 if (data == null || string.IsNullOrWhiteSpace(data.DeviceId))
                 {
                     Console.WriteLine("❌ Invalid payload");
                     return;
                 }
 
-                // ===== Validate Device Key =====
                 var expectedKey = _config[$"DeviceKeys:{data.DeviceId}"];
 
                 if (string.IsNullOrWhiteSpace(data.DeviceKey) ||
@@ -55,7 +55,6 @@ public class MqttBackgroundService : BackgroundService
                     return;
                 }
 
-                // ===== Update runtime state =====
                 DeviceRuntimeState.IsConnected = true;
                 DeviceRuntimeState.DeviceName = data.DeviceId;
                 DeviceRuntimeState.Firmware = data.Firmware;
@@ -69,7 +68,25 @@ public class MqttBackgroundService : BackgroundService
             }
         });
 
-        var options = new MqttClientOptionsBuilder()
+        // ===== Reconnect Handler =====
+        _mqttClient.UseDisconnectedHandler(async e =>
+        {
+            Console.WriteLine("⚠ MQTT disconnected. Reconnecting in 5 seconds...");
+
+            await Task.Delay(TimeSpan.FromSeconds(5));
+
+            try
+            {
+                await _mqttClient.ConnectAsync(_options!, stoppingToken);
+                Console.WriteLine("🔄 MQTT reconnected");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("❌ Reconnect failed: " + ex.Message);
+            }
+        });
+
+        _options = new MqttClientOptionsBuilder()
             .WithTcpServer(
                 _config["Mqtt:Host"],
                 int.Parse(_config["Mqtt:Port"]!))
@@ -79,7 +96,7 @@ public class MqttBackgroundService : BackgroundService
             .WithTls()
             .Build();
 
-        await _mqttClient.ConnectAsync(options, stoppingToken);
+        await _mqttClient.ConnectAsync(_options, stoppingToken);
 
         Console.WriteLine("✅ MQTT Connected (.NET)");
 
@@ -89,6 +106,9 @@ public class MqttBackgroundService : BackgroundService
                 .Build());
 
         Console.WriteLine("📡 Subscribed to ds32/device/+/heartbeat");
+
+        // Giữ service sống
+        await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 
     private record DeviceHeartbeatReq(

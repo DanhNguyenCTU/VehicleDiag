@@ -1,15 +1,16 @@
-﻿using System.Text;
-using System.Text.Json;
-using MQTTnet;
+﻿using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Client.Options;
+using MQTTnet.Protocol;
+using System.Text;
+using System.Text.Json;
 
 namespace VehicleDiag.Api.Services;
 
 public class MqttBackgroundService : BackgroundService
 {
     private readonly IConfiguration _config;
-    private IMqttClient? _mqttClient;
+    private IMqttClient? _client;
     private IMqttClientOptions? _options;
 
     public MqttBackgroundService(IConfiguration config)
@@ -20,14 +21,14 @@ public class MqttBackgroundService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var factory = new MqttFactory();
-        _mqttClient = factory.CreateMqttClient();
+        _client = factory.CreateMqttClient();
 
-        // ===== Message Handler =====
-        _mqttClient.UseApplicationMessageReceivedHandler(e =>
+        // ===== MESSAGE HANDLER (MQTTnet v3) =====
+        _client.UseApplicationMessageReceivedHandler(e =>
         {
             var payload = Encoding.UTF8.GetString(e.ApplicationMessage.Payload);
 
-            Console.WriteLine($"📥 MQTT Topic: {e.ApplicationMessage.Topic}");
+            Console.WriteLine($"📥 Topic: {e.ApplicationMessage.Topic}");
             Console.WriteLine($"Payload: {payload}");
 
             try
@@ -48,7 +49,6 @@ public class MqttBackgroundService : BackgroundService
                 var expectedKey = _config[$"DeviceKeys:{data.DeviceId}"];
 
                 if (string.IsNullOrWhiteSpace(data.DeviceKey) ||
-                    expectedKey == null ||
                     expectedKey != data.DeviceKey)
                 {
                     Console.WriteLine("❌ Invalid device key");
@@ -60,24 +60,24 @@ public class MqttBackgroundService : BackgroundService
                 DeviceRuntimeState.Firmware = data.Firmware;
                 DeviceRuntimeState.LastSeenUtc = DateTime.UtcNow;
 
-                Console.WriteLine("✅ Heartbeat processed (.NET)");
+                Console.WriteLine("✅ Heartbeat processed");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("❌ JSON Error: " + ex.Message);
+                Console.WriteLine("❌ JSON error: " + ex.Message);
             }
         });
 
-        // ===== Reconnect Handler =====
-        _mqttClient.UseDisconnectedHandler(async e =>
+        // ===== DISCONNECT HANDLER (MQTTnet v3) =====
+        _client.UseDisconnectedHandler(async e =>
         {
-            Console.WriteLine("⚠ MQTT disconnected. Reconnecting in 5 seconds...");
+            Console.WriteLine("⚠ MQTT disconnected. Reconnecting in 5s...");
 
             await Task.Delay(TimeSpan.FromSeconds(5));
 
             try
             {
-                await _mqttClient.ConnectAsync(_options!, stoppingToken);
+                await _client.ConnectAsync(_options!);
                 Console.WriteLine("🔄 MQTT reconnected");
             }
             catch (Exception ex)
@@ -86,28 +86,33 @@ public class MqttBackgroundService : BackgroundService
             }
         });
 
+        // ===== MQTT OPTIONS =====
         _options = new MqttClientOptionsBuilder()
+            .WithClientId($"render-api-{Guid.NewGuid():N}")
             .WithTcpServer(
                 _config["Mqtt:Host"],
                 int.Parse(_config["Mqtt:Port"]!))
             .WithCredentials(
                 _config["Mqtt:Username"],
                 _config["Mqtt:Password"])
-            .WithTls()
+            .WithCleanSession()
+            .WithTls() // HiveMQ Cloud TLS
             .Build();
 
-        await _mqttClient.ConnectAsync(_options, stoppingToken);
+        // ===== CONNECT =====
+        await _client.ConnectAsync(_options);
 
         Console.WriteLine("✅ MQTT Connected (.NET)");
 
-        await _mqttClient.SubscribeAsync(
-            new TopicFilterBuilder()
-                .WithTopic("ds32/device/+/heartbeat")
-                .Build());
+        // ===== SUBSCRIBE =====
+        await _client.SubscribeAsync(new TopicFilterBuilder()
+            .WithTopic("vehicle/#")
+            .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+            .Build());
 
-        Console.WriteLine("📡 Subscribed to ds32/device/+/heartbeat");
+        Console.WriteLine("📡 Subscribed to vehicle/#");
 
-        // Giữ service sống
+        // Keep service alive
         await Task.Delay(Timeout.Infinite, stoppingToken);
     }
 

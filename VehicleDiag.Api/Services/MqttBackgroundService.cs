@@ -23,8 +23,8 @@ public class MqttBackgroundService : BackgroundService
         var factory = new MqttFactory();
         _client = factory.CreateMqttClient();
 
-        // ===== MESSAGE HANDLER (MQTTnet v3) =====
-        _client.UseApplicationMessageReceivedHandler(e =>
+        // ================= MESSAGE HANDLER =================
+        _client.UseApplicationMessageReceivedHandler(async e =>
         {
             var payload = Encoding.UTF8.GetString(e.ApplicationMessage.Payload);
 
@@ -55,12 +55,22 @@ public class MqttBackgroundService : BackgroundService
                     return;
                 }
 
+                // Update runtime state
                 DeviceRuntimeState.IsConnected = true;
                 DeviceRuntimeState.DeviceName = data.DeviceId;
                 DeviceRuntimeState.Firmware = data.Firmware;
                 DeviceRuntimeState.LastSeenUtc = DateTime.UtcNow;
 
                 Console.WriteLine("✅ Heartbeat processed");
+
+                // ================= SEND ACK =================
+                await _client.PublishAsync(new MqttApplicationMessageBuilder()
+                    .WithTopic($"vehicle/{data.DeviceId.ToLower()}/ack")
+                    .WithPayload("{\"status\":\"ok\"}")
+                    .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                    .Build());
+
+                Console.WriteLine("📤 ACK sent");
             }
             catch (Exception ex)
             {
@@ -68,7 +78,7 @@ public class MqttBackgroundService : BackgroundService
             }
         });
 
-        // ===== DISCONNECT HANDLER (MQTTnet v3) =====
+        // ================= DISCONNECT HANDLER =================
         _client.UseDisconnectedHandler(async e =>
         {
             Console.WriteLine("⚠ MQTT disconnected. Reconnecting in 5s...");
@@ -78,6 +88,10 @@ public class MqttBackgroundService : BackgroundService
             try
             {
                 await _client.ConnectAsync(_options!);
+
+                // Resubscribe after reconnect
+                await SubscribeTopics();
+
                 Console.WriteLine("🔄 MQTT reconnected");
             }
             catch (Exception ex)
@@ -86,7 +100,7 @@ public class MqttBackgroundService : BackgroundService
             }
         });
 
-        // ===== MQTT OPTIONS =====
+        // ================= MQTT OPTIONS =================
         _options = new MqttClientOptionsBuilder()
             .WithClientId($"render-api-{Guid.NewGuid():N}")
             .WithTcpServer(
@@ -96,24 +110,26 @@ public class MqttBackgroundService : BackgroundService
                 _config["Mqtt:Username"],
                 _config["Mqtt:Password"])
             .WithCleanSession()
-            .WithTls() // HiveMQ Cloud TLS
+            .WithTls()
             .Build();
 
-        // ===== CONNECT =====
+        // ================= CONNECT =================
         await _client.ConnectAsync(_options);
-
         Console.WriteLine("✅ MQTT Connected (.NET)");
 
-        // ===== SUBSCRIBE =====
-        await _client.SubscribeAsync(new TopicFilterBuilder()
-            .WithTopic("vehicle/#")
-            .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
-            .Build());
-
-        Console.WriteLine("📡 Subscribed to vehicle/#");
+        await SubscribeTopics();
 
         // Keep service alive
         await Task.Delay(Timeout.Infinite, stoppingToken);
+    }
+    private async Task SubscribeTopics()
+    {
+        await _client!.SubscribeAsync(new TopicFilterBuilder()
+            .WithTopic("vehicle/+/heartbeat")
+            .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+            .Build());
+
+        Console.WriteLine("📡 Subscribed to vehicle/+/heartbeat");
     }
 
     private record DeviceHeartbeatReq(

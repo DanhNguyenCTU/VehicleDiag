@@ -20,7 +20,8 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<AppUser>().ToTable("AppUser").HasKey(x => x.Id);
+        modelBuilder.Entity<AppUser>().ToTable("appuser").HasKey(x => x.Id);
+
         modelBuilder.Entity<EcuDtcCurrent>().ToTable("EcuDtcCurrent").HasKey(x => new { x.VehicleId, x.DtcCode });
         modelBuilder.Entity<Vehicle>().ToTable("Vehicle").HasKey(x => x.VehicleId);
         modelBuilder.Entity<Ecu>().ToTable("Ecu").HasKey(x => x.EcuId);

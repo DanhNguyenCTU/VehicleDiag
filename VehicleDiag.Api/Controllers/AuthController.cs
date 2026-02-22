@@ -26,11 +26,6 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginReq req)
     {
-        // BẮT BUỘC HTTPS
-        if (!Request.IsHttps)
-        {
-            return BadRequest("Login must be performed over HTTPS.");
-        }
 
         // Validate user
         var user = await _db.AppUsers

@@ -102,7 +102,7 @@ public class MqttBackgroundService : BackgroundService
 
         // ================= MQTT OPTIONS =================
         _options = new MqttClientOptionsBuilder()
-            .WithClientId($"render-api-{Guid.NewGuid():N}")
+            .WithClientId("vehicle-api-local")
             .WithTcpServer(
                 _config["Mqtt:Host"],
                 int.Parse(_config["Mqtt:Port"]!))

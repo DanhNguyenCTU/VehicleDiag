@@ -44,15 +44,27 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+builder.Services.AddDbContext<AppDbContext>(opt =>
+{
+    var conn = builder.Configuration.GetConnectionString("Default");
+
+    if (string.IsNullOrEmpty(conn))
+        throw new Exception("Database connection string missing");
+
+    opt.UseNpgsql(conn);
+});
 
 // EF Core
 //builder.Services.AddDbContext<AppDbContext>(opt =>
-    //opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
+//opt.UseSqlServer(builder.Configuration.GetConnectionString("Default")));
 
 // JWT
-var jwtKey = builder.Configuration["Jwt:Key"]!;
-var jwtIssuer = builder.Configuration["Jwt:Issuer"]!;
-var jwtAudience = builder.Configuration["Jwt:Audience"]!;
+var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+var jwtAudience = builder.Configuration["Jwt:Audience"];
+
+if (string.IsNullOrEmpty(jwtKey))
+    throw new Exception("JWT Key is missing!");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
@@ -78,7 +90,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-//app.UseHttpsRedirection();
+app.UseHttpsRedirection();
 
 app.UseAuthentication();
 app.UseAuthorization();

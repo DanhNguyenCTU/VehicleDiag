@@ -53,6 +53,7 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
 
     opt.UseNpgsql(conn);
 });
+Console.WriteLine("AddDbContext registered successfully");
 
 // EF Core
 //builder.Services.AddDbContext<AppDbContext>(opt =>

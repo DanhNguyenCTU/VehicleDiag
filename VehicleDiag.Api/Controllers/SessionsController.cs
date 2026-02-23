@@ -28,6 +28,7 @@ public class SessionsController : ControllerBase
 
 
     public record Esp32SubmitInfoReq(
+        string? Protocol,
         string? Vin,
         string? CalId,
         string? Cvn,
@@ -121,13 +122,12 @@ public class SessionsController : ControllerBase
     [AllowAnonymous]
     [HttpPost("{sessionId:int}/dtcs")]
     public async Task<IActionResult> SubmitDtcsFromEsp32(
-        int sessionId,
-        [FromBody] Esp32SubmitDtcsReq req)
+       int sessionId,
+       [FromBody] Esp32SubmitDtcsReq req)
     {
-        if (req == null)
+        if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
             return BadRequest("Invalid payload");
 
-        // Validate protocol (OBDII | KWP)
         if (req.Protocol != "OBDII" && req.Protocol != "KWP")
             return BadRequest("Invalid protocol");
 
@@ -136,6 +136,12 @@ public class SessionsController : ControllerBase
 
         if (session == null)
             return NotFound("Session not found");
+
+        if (session.Status != SessionStatus.Processing)
+            return BadRequest("Invalid session state");
+
+        if (!string.Equals(session.Protocol, req.Protocol, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Protocol mismatch");
 
         int vehicleId = session.VehicleId;
         var now = DateTime.UtcNow;
@@ -176,7 +182,7 @@ public class SessionsController : ControllerBase
         {
             session.Status = SessionStatus.Failed;
             await _db.SaveChangesAsync();
-            throw;
+            return StatusCode(500, "Failed to save DTCs");
         }
     }
 
@@ -192,10 +198,28 @@ public class SessionsController : ControllerBase
         if (req == null || string.IsNullOrWhiteSpace(req.DeviceId))
             return BadRequest("Invalid deviceId");
 
-        string deviceId = req.DeviceId;
+        // ===== HEARTBEAT GỘP VÀO ĐÂY =====
+        DeviceRuntimeState.IsConnected = true;
+        DeviceRuntimeState.DeviceName = req.DeviceId;
+        DeviceRuntimeState.LastSeenUtc = DateTime.UtcNow;
 
+        // ===== AUTO FAIL SESSION TREO =====
+        var timeout = DateTime.UtcNow.AddMinutes(-5);
+
+        var expired = await _db.EcuReadSessions
+            .Where(x => x.Status == SessionStatus.Processing &&
+                        x.CreatedAt < timeout)
+            .ToListAsync();
+
+        foreach (var s in expired)
+            s.Status = SessionStatus.Failed;
+
+        if (expired.Count > 0)
+            await _db.SaveChangesAsync();
+
+        // ===== UPDATE DEVICE ONLINE STATUS =====
         var session = await _db.EcuReadSessions
-            .Where(x => x.DeviceId == deviceId &&
+            .Where(x => x.DeviceId == req.DeviceId &&
                         x.Status == SessionStatus.Pending)
             .OrderBy(x => x.CreatedAt)
             .FirstOrDefaultAsync();
@@ -216,13 +240,11 @@ public class SessionsController : ControllerBase
             return BadRequest("Vehicle not found");
         }
 
-        //  JSON CHO ESP32
         return Ok(new
         {
             sessionId = session.SessionId,
             actionType = session.ActionType,
             protocol = session.Protocol,
-
             brand = vehicle.Brand,
             model = vehicle.Model,
             year = vehicle.Year
@@ -239,11 +261,23 @@ public class SessionsController : ControllerBase
         int sessionId,
         [FromBody] Esp32SubmitInfoReq req)
     {
+        if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
+            return BadRequest("Invalid payload");
+
+        if (req.Protocol != "OBDII" && req.Protocol != "KWP")
+            return BadRequest("Invalid protocol");
+
         var session = await _db.EcuReadSessions
             .FirstOrDefaultAsync(x => x.SessionId == sessionId);
 
         if (session == null)
             return NotFound("Session not found");
+
+        if (session.Status != SessionStatus.Processing)
+            return BadRequest("Invalid session state");
+
+        if (!string.Equals(session.Protocol, req.Protocol, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Protocol mismatch");
 
         _db.EcuInfoResults.RemoveRange(
             _db.EcuInfoResults.Where(x => x.SessionId == sessionId)
@@ -283,6 +317,9 @@ public class SessionsController : ControllerBase
 
         if (session == null)
             return NotFound("Session not found");
+
+        if (session.Status != SessionStatus.Processing)
+            return BadRequest("Invalid session state");
 
         session.Status = SessionStatus.Completed;
         session.CompletedAt = DateTime.UtcNow;

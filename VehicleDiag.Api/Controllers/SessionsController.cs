@@ -7,7 +7,7 @@ using VehicleDiag.Api.Services;
 using VehicleDiag.Api.Dtos.Requests;
 using VehicleDiag.Api.Models;
 using VehicleDiag.Api.Constants;
-
+using System.Linq;
 namespace VehicleDiag.Api.Controllers;
 
 [ApiController]
@@ -15,7 +15,12 @@ namespace VehicleDiag.Api.Controllers;
 public class SessionsController : ControllerBase
 {
     private readonly AppDbContext _db;
-    public SessionsController(AppDbContext db) => _db = db;
+    private readonly IConfiguration _cfg;
+    public SessionsController(AppDbContext db, IConfiguration cfg)
+    {
+        _db = db;
+        _cfg = cfg;
+    }
 
     // =========================
     // ESP32 DTOs
@@ -114,7 +119,11 @@ public class SessionsController : ControllerBase
         return Ok(new { sessionId = session.SessionId });
     }
 
-    public record Esp32PendingReq(string DeviceId);
+    public record Esp32PendingReq(
+        string DeviceId,
+        string DeviceKey,
+        string Firmware
+    );
 
     // =========================================================
     // ESP32 → SUBMIT DTCs
@@ -195,15 +204,24 @@ public class SessionsController : ControllerBase
     public async Task<IActionResult> GetPending(
         [FromBody] Esp32PendingReq req)
     {
-        if (req == null || string.IsNullOrWhiteSpace(req.DeviceId))
-            return BadRequest("Invalid deviceId");
+        if (req == null ||
+            string.IsNullOrWhiteSpace(req.DeviceId) ||
+            string.IsNullOrWhiteSpace(req.DeviceKey))
+            return BadRequest("Invalid device payload");
 
-        // ===== HEARTBEAT GỘP VÀO ĐÂY =====
+        // ===== VALIDATE DEVICE KEY =====
+        var expectedKey = _cfg[$"DeviceKeys:{req.DeviceId}"];
+        if (string.IsNullOrWhiteSpace(expectedKey) ||
+            expectedKey != req.DeviceKey)
+            return Unauthorized("Invalid device key");
+
+        // ===== UPDATE ONLINE + FIRMWARE =====
         DeviceRuntimeState.IsConnected = true;
         DeviceRuntimeState.DeviceName = req.DeviceId;
+        DeviceRuntimeState.Firmware = req.Firmware ?? "unknown";
         DeviceRuntimeState.LastSeenUtc = DateTime.UtcNow;
 
-        // ===== AUTO FAIL SESSION TREO =====
+        // ===== AUTO FAIL SESSION TREO (>5 phút) =====
         var timeout = DateTime.UtcNow.AddMinutes(-5);
 
         var expired = await _db.EcuReadSessions
@@ -217,7 +235,7 @@ public class SessionsController : ControllerBase
         if (expired.Count > 0)
             await _db.SaveChangesAsync();
 
-        // ===== UPDATE DEVICE ONLINE STATUS =====
+        // ===== LẤY SESSION PENDING CỦA DEVICE =====
         var session = await _db.EcuReadSessions
             .Where(x => x.DeviceId == req.DeviceId &&
                         x.Status == SessionStatus.Pending)

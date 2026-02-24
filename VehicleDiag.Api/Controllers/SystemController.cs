@@ -17,8 +17,7 @@ public class SystemController : ControllerBase
     public IActionResult Status()
     {
         bool connected =
-            DeviceRuntimeState.IsConnected &&
-            (DateTime.UtcNow - DeviceRuntimeState.LastSeenUtc).TotalSeconds < 10;
+            (DateTime.UtcNow - DeviceRuntimeState.LastSeenUtc).TotalSeconds < 15;
 
         return Ok(new
         {

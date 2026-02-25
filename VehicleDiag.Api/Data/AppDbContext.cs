@@ -22,7 +22,8 @@ public class AppDbContext : DbContext
     {
         modelBuilder.Entity<AppUser>().ToTable("AppUser").HasKey(x => x.Id);
 
-        modelBuilder.Entity<EcuDtcCurrent>().ToTable("EcuDtcCurrent").HasKey(x => new { x.VehicleId, x.DtcCode });
+        modelBuilder.Entity<EcuDtcCurrent>()
+    .HasKey(x => new { x.VehicleId, x.DtcCode });
         modelBuilder.Entity<Vehicle>().ToTable("Vehicle").HasKey(x => x.VehicleId);
         modelBuilder.Entity<Ecu>().ToTable("Ecu").HasKey(x => x.EcuId);
         modelBuilder.Entity<EcuReadSession>().ToTable("EcuReadSession").HasKey(x => x.SessionId);

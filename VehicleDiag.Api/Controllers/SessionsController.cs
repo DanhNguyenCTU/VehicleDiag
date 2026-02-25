@@ -157,11 +157,33 @@ public class SessionsController : ControllerBase
 
         try
         {
+            if (!(req.Dtcs?.Any() ?? false))
+            {
+                var olds = await _db.EcuDtcCurrent
+                    .Where(x => x.VehicleId == vehicleId)
+                    .ToListAsync();
+
+                _db.EcuDtcCurrent.RemoveRange(olds);
+
+                await _db.SaveChangesAsync();
+
+                return Ok(new { ok = true });
+            }
             foreach (var d in req.Dtcs ?? Enumerable.Empty<Esp32DtcItem>())
             {
                 if (string.IsNullOrWhiteSpace(d.DtcCode))
                     continue;
 
+                // 1️⃣ INSERT lịch sử theo session
+                _db.EcuDtcResults.Add(new EcuDtcResult
+                {
+                    SessionId = sessionId,
+                    DtcCode = d.DtcCode.Trim(),
+                    StatusByte = d.StatusByte,
+                    Protocol = req.Protocol
+                });
+
+                // 2️⃣ UPSERT trạng thái hiện tại
                 var cur = await _db.EcuDtcCurrent
                     .FirstOrDefaultAsync(x =>
                         x.VehicleId == vehicleId &&

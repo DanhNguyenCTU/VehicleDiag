@@ -7,5 +7,6 @@
         public string Model { get; set; } = "";
         public int Year { get; set; }
         public bool IsActive { get; set; }
+        public string? DeviceId { get; set; }
     }
 }

@@ -10,6 +10,7 @@ using VehicleDiag.Api.Constants;
 using System.Linq;
 namespace VehicleDiag.Api.Controllers;
 
+[Authorize(Roles = "Technician,Admin")]
 [ApiController]
 [Route("api/sessions")]
 public class SessionsController : ControllerBase
@@ -53,62 +54,51 @@ public class SessionsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateSessionReq req)
     {
-        if (!DeviceRuntimeState.IsConnected)
-            return BadRequest("Device not connected");
-
         var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (userIdStr == null)
             return Unauthorized();
 
-        // Validate Vehicle
         var vehicle = await _db.Vehicles
             .FirstOrDefaultAsync(v => v.VehicleId == req.VehicleId && v.IsActive);
 
         if (vehicle == null)
             return BadRequest("Invalid vehicle");
 
-        // Normalize + Validate ActionType 
+        if (string.IsNullOrWhiteSpace(vehicle.DeviceId))
+            return BadRequest("No device assigned to this vehicle");
+
+        // Normalize action
         if (string.IsNullOrWhiteSpace(req.ActionType))
             return BadRequest("ActionType is required");
 
         string action = req.ActionType.Trim();
 
-        // CHẤP NHẬN CẢ UI CŨ + ESP32
         if (action.Equals("READ_INFO", StringComparison.OrdinalIgnoreCase))
-            action = "ReadInfo";
+            action = SessionActionType.READ_INFO;
         else if (action.Equals("READ_DTC", StringComparison.OrdinalIgnoreCase))
-            action = "ReadDTC";
+            action = SessionActionType.READ_DTC;
         else if (action.Equals("CLEAR_DTC", StringComparison.OrdinalIgnoreCase))
-            action = "ClearDTC";
+            action = SessionActionType.CLEAR_DTC;
 
-        // Validate theo format ESP32
         if (action != SessionActionType.READ_INFO &&
             action != SessionActionType.READ_DTC &&
             action != SessionActionType.CLEAR_DTC)
-        {
             return BadRequest($"Invalid ActionType: {req.ActionType}");
-        }
 
         string protocol = string.IsNullOrWhiteSpace(req.Protocol)
             ? "OBDII"
             : req.Protocol.Trim().ToUpper();
 
-        // Chỉ cho phép protocol hợp lệ
         if (protocol != "OBDII" && protocol != "KWP")
             return BadRequest("Invalid protocol");
 
-
-
-        // 4️⃣ Create SESSION
         var session = new EcuReadSession
         {
             CreatedAt = DateTime.UtcNow,
-            ActionType = action,                 // ReadInfo / ReadDTC / ClearDTC
-            DeviceId = DeviceRuntimeState.DeviceName,
-
+            ActionType = action,
+            DeviceId = vehicle.DeviceId!,   // ✅ LẤY TỪ VEHICLE
             VehicleId = vehicle.VehicleId,
             Protocol = protocol,
-
             CreatedByUserId = int.Parse(userIdStr),
             Status = SessionStatus.Pending
         };
@@ -137,9 +127,6 @@ public class SessionsController : ControllerBase
         if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
             return BadRequest("Invalid payload");
 
-        if (req.Protocol != "OBDII" && req.Protocol != "KWP")
-            return BadRequest("Invalid protocol");
-
         var session = await _db.EcuReadSessions
             .FirstOrDefaultAsync(x => x.SessionId == sessionId);
 
@@ -155,66 +142,64 @@ public class SessionsController : ControllerBase
         int vehicleId = session.VehicleId;
         var now = DateTime.UtcNow;
 
-        try
+        // ===== 1️⃣ Load current DTCs in DB
+        var currentDbDtcs = await _db.EcuDtcCurrent
+            .Where(x => x.VehicleId == vehicleId)
+            .ToListAsync();
+
+        var incomingDtcs = req.Dtcs ?? new List<Esp32DtcItem>();
+
+        var incomingCodes = incomingDtcs
+            .Where(x => !string.IsNullOrWhiteSpace(x.DtcCode))
+            .Select(x => x.DtcCode.Trim())
+            .ToHashSet();
+
+        // ===== 2️⃣ Remove DTC không còn tồn tại
+        var toRemove = currentDbDtcs
+            .Where(db => !incomingCodes.Contains(db.DtcCode))
+            .ToList();
+
+        if (toRemove.Any())
+            _db.EcuDtcCurrent.RemoveRange(toRemove);
+
+        // ===== 3️⃣ Upsert DTC mới / update
+        foreach (var d in incomingDtcs)
         {
-            if (!(req.Dtcs?.Any() ?? false))
+            if (string.IsNullOrWhiteSpace(d.DtcCode))
+                continue;
+
+            var code = d.DtcCode.Trim();
+
+            _db.EcuDtcResults.Add(new EcuDtcResult
             {
-                var olds = await _db.EcuDtcCurrent
-                    .Where(x => x.VehicleId == vehicleId)
-                    .ToListAsync();
+                SessionId = sessionId,
+                DtcCode = code,
+                StatusByte = d.StatusByte,
+                Protocol = req.Protocol
+            });
 
-                _db.EcuDtcCurrent.RemoveRange(olds);
+            var existing = currentDbDtcs
+                .FirstOrDefault(x => x.DtcCode == code);
 
-                await _db.SaveChangesAsync();
-
-                return Ok(new { ok = true });
-            }
-            foreach (var d in req.Dtcs ?? Enumerable.Empty<Esp32DtcItem>())
+            if (existing == null)
             {
-                if (string.IsNullOrWhiteSpace(d.DtcCode))
-                    continue;
-
-                // 1️⃣ INSERT lịch sử theo session
-                _db.EcuDtcResults.Add(new EcuDtcResult
+                _db.EcuDtcCurrent.Add(new EcuDtcCurrent
                 {
-                    SessionId = sessionId,
-                    DtcCode = d.DtcCode.Trim(),
+                    VehicleId = vehicleId,
+                    DtcCode = code,
                     StatusByte = d.StatusByte,
-                    Protocol = req.Protocol
+                    LastSeenAt = now
                 });
-
-                // 2️⃣ UPSERT trạng thái hiện tại
-                var cur = await _db.EcuDtcCurrent
-                    .FirstOrDefaultAsync(x =>
-                        x.VehicleId == vehicleId &&
-                        x.DtcCode == d.DtcCode);
-
-                if (cur == null)
-                {
-                    _db.EcuDtcCurrent.Add(new EcuDtcCurrent
-                    {
-                        VehicleId = vehicleId,
-                        DtcCode = d.DtcCode.Trim(),
-                        StatusByte = d.StatusByte,
-                        LastSeenAt = now
-                    });
-                }
-                else
-                {
-                    cur.StatusByte = d.StatusByte;
-                    cur.LastSeenAt = now;
-                }
             }
+            else
+            {
+                existing.StatusByte = d.StatusByte;
+                existing.LastSeenAt = now;
+            }
+        }
 
-            await _db.SaveChangesAsync();
-            return Ok(new { ok = true });
-        }
-        catch
-        {
-            session.Status = SessionStatus.Failed;
-            await _db.SaveChangesAsync();
-            return StatusCode(500, "Failed to save DTCs");
-        }
+        await _db.SaveChangesAsync();
+        return Ok(new { ok = true });
     }
 
 
@@ -223,31 +208,36 @@ public class SessionsController : ControllerBase
     // =========================================================
     [AllowAnonymous]
     [HttpPost("pending")]
-    public async Task<IActionResult> GetPending(
-        [FromBody] Esp32PendingReq req)
+    public async Task<IActionResult> GetPending([FromBody] Esp32PendingReq req)
     {
         if (req == null ||
             string.IsNullOrWhiteSpace(req.DeviceId) ||
             string.IsNullOrWhiteSpace(req.DeviceKey))
             return BadRequest("Invalid device payload");
 
-        // ===== VALIDATE DEVICE KEY =====
+        // 1️⃣ Check device exists
+        var device = await _db.Devices
+            .FirstOrDefaultAsync(x => x.DeviceId == req.DeviceId && x.IsActive);
+
+        if (device == null)
+            return Unauthorized("Unknown device");
+
+        // 2️⃣ Validate key
         var expectedKey = _cfg[$"DeviceKeys:{req.DeviceId}"];
         if (string.IsNullOrWhiteSpace(expectedKey) ||
             expectedKey != req.DeviceKey)
             return Unauthorized("Invalid device key");
 
-        // ===== UPDATE ONLINE + FIRMWARE =====
-        DeviceRuntimeState.IsConnected = true;
-        DeviceRuntimeState.DeviceName = req.DeviceId;
-        DeviceRuntimeState.Firmware = req.Firmware ?? "unknown";
-        DeviceRuntimeState.LastSeenUtc = DateTime.UtcNow;
+        // 3️⃣ Update LastSeen
+        device.LastSeenAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
 
-        // ===== AUTO FAIL SESSION TREO (>5 phút) =====
+        // 4️⃣ Auto fail processing session > 5 phút (CHỈ của device này)
         var timeout = DateTime.UtcNow.AddMinutes(-5);
 
         var expired = await _db.EcuReadSessions
-            .Where(x => x.Status == SessionStatus.Processing &&
+            .Where(x => x.DeviceId == req.DeviceId &&
+                        x.Status == SessionStatus.Processing &&
                         x.CreatedAt < timeout)
             .ToListAsync();
 
@@ -257,7 +247,7 @@ public class SessionsController : ControllerBase
         if (expired.Count > 0)
             await _db.SaveChangesAsync();
 
-        // ===== LẤY SESSION PENDING CỦA DEVICE =====
+        // 5️⃣ Lấy session pending của đúng device
         var session = await _db.EcuReadSessions
             .Where(x => x.DeviceId == req.DeviceId &&
                         x.Status == SessionStatus.Pending)
@@ -303,9 +293,6 @@ public class SessionsController : ControllerBase
     {
         if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
             return BadRequest("Invalid payload");
-
-        if (req.Protocol != "OBDII" && req.Protocol != "KWP")
-            return BadRequest("Invalid protocol");
 
         var session = await _db.EcuReadSessions
             .FirstOrDefaultAsync(x => x.SessionId == sessionId);

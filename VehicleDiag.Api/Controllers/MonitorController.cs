@@ -122,13 +122,15 @@ public class MonitorController : ControllerBase
     [HttpGet("vehicle/{vehicleId:int}/dtc")]
     public async Task<IActionResult> GetCurrentDtcs(int vehicleId)
     {
+        // 1️⃣ Lấy vehicle + model
         var vehicle = await _db.Vehicles
             .Include(v => v.VehicleModel)
-            .FirstOrDefaultAsync(v => v.VehicleId == vehicleId && v.IsActive == true);
+            .FirstOrDefaultAsync(v => v.VehicleId == vehicleId && v.IsActive);
 
         if (vehicle == null || vehicle.VehicleModel == null)
             return NotFound("Vehicle not found");
 
+        // 2️⃣ Kiểm tra quyền Viewer
         var role = User.FindFirst(ClaimTypes.Role)?.Value;
 
         if (role == "Viewer")
@@ -142,39 +144,49 @@ public class MonitorController : ControllerBase
                 return Forbid();
         }
 
-        // Lấy GroupCode theo Brand
+        // 3️⃣ Lấy GroupCode theo Brand
         var groupCode = await _db.ManufacturerBrands
             .Where(x => x.Brand == vehicle.VehicleModel.Brand)
             .Select(x => x.GroupCode)
             .FirstOrDefaultAsync();
 
-        // Query rõ ràng 2 bước để EF không lỗi
-        var currentDtcs = await _db.EcuDtcCurrent
+        // 4️⃣ Lấy danh sách DTC hiện tại
+        var currentCodes = await _db.EcuDtcCurrent
             .Where(x => x.VehicleId == vehicleId)
+            .Select(x => x.DtcCode)
             .ToListAsync();
 
-        var result = new List<object>();
+        if (!currentCodes.Any())
+            return Ok(new List<object>());
 
-        foreach (var cur in currentDtcs)
-        {
-            var description = await _db.DtcDictionary
-                .Where(d =>
-                    d.DtcCode == cur.DtcCode &&
-                    (
-                        (d.Scope == "Manufacturer" && d.GroupCode == groupCode)
-                        || d.Scope == "Generic"
-                    )
+        // 5️⃣ Lấy dictionary match (1 query duy nhất)
+        var dictMatches = await _db.DtcDictionary
+            .Where(d =>
+                currentCodes.Contains(d.DtcCode) &&
+                (
+                    d.Scope == "Generic" ||
+                    (groupCode != null &&
+                     d.Scope == "Manufacturer" &&
+                     d.GroupCode == groupCode)
                 )
+            )
+            .ToListAsync();
+
+        // 6️⃣ Ưu tiên Manufacturer nếu có
+        var result = currentCodes.Select(code =>
+        {
+            var description = dictMatches
+                .Where(d => d.DtcCode == code)
                 .OrderBy(d => d.Scope == "Manufacturer" ? 0 : 1)
                 .Select(d => d.Description)
-                .FirstOrDefaultAsync();
+                .FirstOrDefault();
 
-            result.Add(new
+            return new
             {
-                cur.DtcCode,
+                DtcCode = code,
                 Description = description ?? "Unknown fault"
-            });
-        }
+            };
+        }).ToList();
 
         return Ok(result);
     }

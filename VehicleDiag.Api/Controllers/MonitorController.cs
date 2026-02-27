@@ -90,9 +90,18 @@ public class MonitorController : ControllerBase
                 return Forbid();
         }
 
-        var dtcs = await _db.EcuDtcCurrent
-            .Where(x => x.VehicleId == vehicleId)
-            .ToListAsync();
+        var dtcs = await (
+            from cur in _db.EcuDtcCurrent
+            join dict in _db.DtcDictionary
+                on cur.DtcCode equals dict.DtcCode into gj
+            from dict in gj.DefaultIfEmpty()
+            where cur.VehicleId == vehicleId
+            select new
+            {
+                cur.DtcCode,
+                Description = dict != null ? dict.Description : "Unknown fault"
+            }
+        ).ToListAsync();
 
         return Ok(dtcs);
     }

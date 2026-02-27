@@ -17,7 +17,7 @@ public class AppDbContext : DbContext
     public DbSet<EcuInfoResult> EcuInfoResults => Set<EcuInfoResult>();
     public DbSet<EcuDtcResult> EcuDtcResults => Set<EcuDtcResult>();
     public DbSet<EcuDtcCurrent> EcuDtcCurrent => Set<EcuDtcCurrent>();
-
+    public DbSet<DtcDictionary> DtcDictionary => Set<DtcDictionary>();
     public DbSet<UserVehicle> UserVehicles => Set<UserVehicle>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -32,6 +32,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<EcuReadSession>().ToTable("EcuReadSession").HasKey(x => x.SessionId);
         modelBuilder.Entity<EcuInfoResult>().ToTable("EcuInfoResult").HasKey(x => x.Id);
         modelBuilder.Entity<EcuDtcResult>().ToTable("EcuDtcResult").HasKey(x => x.Id);
+        modelBuilder.Entity<DtcDictionary>().ToTable("DtcDictionary").HasNoKey();
         modelBuilder.Entity<EcuProtocol>().ToTable("EcuProtocol").HasKey(x => x.Id);
     }
 

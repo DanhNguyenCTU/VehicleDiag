@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using VehicleDiag.Api.Data;
+using VehicleDiag.Api.Models;
 
 namespace VehicleDiag.Api.Controllers;
 
@@ -62,6 +63,59 @@ public class MonitorController : ControllerBase
             latest.EngineOn,
             latest.CreatedAt
         });
+    }
+    // ==============================
+    // LẤY VỊ TRÍ TẤT CẢ XE CỦA USER
+    // ==============================
+    [HttpGet("my-vehicles/location")]
+    public async Task<IActionResult> GetMyVehiclesLocation()
+    {
+        var role = User.FindFirst(ClaimTypes.Role)?.Value;
+        var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+
+        IQueryable<Vehicle> query = _db.Vehicles
+            .Where(v => v.IsActive);
+
+        // Nếu là Viewer → chỉ lấy xe được gán
+        if (role == "Viewer")
+        {
+            var myVehicleIds = await _db.UserVehicles
+                .Where(x => x.UserId == userId)
+                .Select(x => x.VehicleId)
+                .ToListAsync();
+
+            query = query.Where(v => myVehicleIds.Contains(v.VehicleId));
+        }
+
+        var vehicles = await query.ToListAsync();
+
+        var result = new List<object>();
+
+        foreach (var vehicle in vehicles)
+        {
+            if (string.IsNullOrWhiteSpace(vehicle.DeviceId))
+                continue;
+
+            var latest = await _db.Telemetry
+                .Where(t => t.DeviceId == vehicle.DeviceId)
+                .OrderByDescending(t => t.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            if (latest == null)
+                continue;
+
+            result.Add(new
+            {
+                vehicle.VehicleId,
+                Name = $"{vehicle.Brand} {vehicle.Model}",
+                latest.Lat,
+                latest.Lng,
+                latest.EngineOn,
+                latest.CreatedAt
+            });
+        }
+
+        return Ok(result);
     }
 
     // ==============================

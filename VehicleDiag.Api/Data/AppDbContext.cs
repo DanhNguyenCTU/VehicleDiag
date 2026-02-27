@@ -15,7 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<Telemetry> Telemetry => Set<Telemetry>();
     public DbSet<Ecu> Ecus => Set<Ecu>();
     public DbSet<EcuProtocol> EcuProtocols => Set<EcuProtocol>();
-
+    public DbSet<ManufacturerBrand> ManufacturerBrands => Set<ManufacturerBrand>();
     public DbSet<EcuReadSession> EcuReadSessions => Set<EcuReadSession>();
     public DbSet<EcuInfoResult> EcuInfoResults => Set<EcuInfoResult>();
     public DbSet<EcuDtcResult> EcuDtcResults => Set<EcuDtcResult>();
@@ -46,6 +46,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Telemetry>()
             .ToTable("Telemetry")
             .HasKey(x => x.Id);
+        modelBuilder.Entity<ManufacturerBrand>()
+            .ToTable("ManufacturerBrand")
+            .HasNoKey();
 
         modelBuilder.Entity<Ecu>()
             .ToTable("Ecu")

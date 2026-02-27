@@ -119,16 +119,14 @@ public class MonitorController : ControllerBase
         return Ok(result);
     }
 
-    // ==============================
-    // LẤY DTC HIỆN TẠI
-    // ==============================
     [HttpGet("vehicle/{vehicleId:int}/dtc")]
     public async Task<IActionResult> GetCurrentDtcs(int vehicleId)
     {
         var vehicle = await _db.Vehicles
-            .FirstOrDefaultAsync(v => v.VehicleId == vehicleId && v.IsActive);
+            .Include(v => v.VehicleModel)
+            .FirstOrDefaultAsync(v => v.VehicleId == vehicleId && v.IsActive == true);
 
-        if (vehicle == null)
+        if (vehicle == null || vehicle.VehicleModel == null)
             return NotFound("Vehicle not found");
 
         var role = User.FindFirst(ClaimTypes.Role)?.Value;
@@ -138,26 +136,46 @@ public class MonitorController : ControllerBase
             var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
             var hasAccess = await _db.UserVehicles
-                .AnyAsync(x => x.UserId == userId &&
-                               x.VehicleId == vehicleId);
+                .AnyAsync(x => x.UserId == userId && x.VehicleId == vehicleId);
 
             if (!hasAccess)
                 return Forbid();
         }
 
-        var dtcs = await (
-            from cur in _db.EcuDtcCurrent
-            join dict in _db.DtcDictionary
-                on cur.DtcCode equals dict.DtcCode into gj
-            from dict in gj.DefaultIfEmpty()
-            where cur.VehicleId == vehicleId
-            select new
+        // Lấy GroupCode theo Brand
+        var groupCode = await _db.ManufacturerBrands
+            .Where(x => x.Brand == vehicle.VehicleModel.Brand)
+            .Select(x => x.GroupCode)
+            .FirstOrDefaultAsync();
+
+        // Query rõ ràng 2 bước để EF không lỗi
+        var currentDtcs = await _db.EcuDtcCurrent
+            .Where(x => x.VehicleId == vehicleId)
+            .ToListAsync();
+
+        var result = new List<object>();
+
+        foreach (var cur in currentDtcs)
+        {
+            var description = await _db.DtcDictionary
+                .Where(d =>
+                    d.DtcCode == cur.DtcCode &&
+                    (
+                        (d.Scope == "Manufacturer" && d.GroupCode == groupCode)
+                        || d.Scope == "Generic"
+                    )
+                )
+                .OrderBy(d => d.Scope == "Manufacturer" ? 0 : 1)
+                .Select(d => d.Description)
+                .FirstOrDefaultAsync();
+
+            result.Add(new
             {
                 cur.DtcCode,
-                Description = dict != null ? dict.Description : "Unknown fault"
-            }
-        ).ToListAsync();
+                Description = description ?? "Unknown fault"
+            });
+        }
 
-        return Ok(dtcs);
+        return Ok(result);
     }
 }

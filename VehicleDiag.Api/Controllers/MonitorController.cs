@@ -76,7 +76,6 @@ public class MonitorController : ControllerBase
         IQueryable<Vehicle> query = _db.Vehicles
             .Where(v => v.IsActive);
 
-        // Nếu là Viewer → chỉ lấy xe được gán
         if (role == "Viewer")
         {
             var myVehicleIds = await _db.UserVehicles
@@ -87,7 +86,9 @@ public class MonitorController : ControllerBase
             query = query.Where(v => myVehicleIds.Contains(v.VehicleId));
         }
 
-        var vehicles = await query.ToListAsync();
+        var vehicles = await query
+            .Include(v => v.VehicleModel)   // 🔥 QUAN TRỌNG
+            .ToListAsync();
 
         var result = new List<object>();
 
@@ -107,7 +108,7 @@ public class MonitorController : ControllerBase
             result.Add(new
             {
                 vehicle.VehicleId,
-                Name = $"{vehicle.Brand} {vehicle.Model}",
+                Name = $"{vehicle.VehicleModel.Brand} {vehicle.VehicleModel.Model}",
                 latest.Lat,
                 latest.Lng,
                 latest.EngineOn,

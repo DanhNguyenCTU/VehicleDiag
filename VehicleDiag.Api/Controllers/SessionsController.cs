@@ -59,6 +59,7 @@ public class SessionsController : ControllerBase
             return Unauthorized();
 
         var vehicle = await _db.Vehicles
+            .Include(v => v.VehicleModel)
             .FirstOrDefaultAsync(v => v.VehicleId == req.VehicleId && v.IsActive);
 
         if (vehicle == null)
@@ -67,23 +68,16 @@ public class SessionsController : ControllerBase
         if (string.IsNullOrWhiteSpace(vehicle.DeviceId))
             return BadRequest("No device assigned to this vehicle");
 
-        // Normalize action
-        if (string.IsNullOrWhiteSpace(req.ActionType))
-            return BadRequest("ActionType is required");
+        string action = req.ActionType?.Trim().ToUpper() ?? "";
 
-        string action = req.ActionType.Trim();
-
-        if (action.Equals("READ_INFO", StringComparison.OrdinalIgnoreCase))
-            action = SessionActionType.READ_INFO;
-        else if (action.Equals("READ_DTC", StringComparison.OrdinalIgnoreCase))
-            action = SessionActionType.READ_DTC;
-        else if (action.Equals("CLEAR_DTC", StringComparison.OrdinalIgnoreCase))
-            action = SessionActionType.CLEAR_DTC;
+        if (action == "READ_INFO") action = SessionActionType.READ_INFO;
+        else if (action == "READ_DTC") action = SessionActionType.READ_DTC;
+        else if (action == "CLEAR_DTC") action = SessionActionType.CLEAR_DTC;
 
         if (action != SessionActionType.READ_INFO &&
             action != SessionActionType.READ_DTC &&
             action != SessionActionType.CLEAR_DTC)
-            return BadRequest($"Invalid ActionType: {req.ActionType}");
+            return BadRequest("Invalid ActionType");
 
         string protocol = string.IsNullOrWhiteSpace(req.Protocol)
             ? "OBDII"
@@ -96,7 +90,7 @@ public class SessionsController : ControllerBase
         {
             CreatedAt = DateTime.UtcNow,
             ActionType = action,
-            DeviceId = vehicle.DeviceId!,   // ✅ LẤY TỪ VEHICLE
+            DeviceId = vehicle.DeviceId!,
             VehicleId = vehicle.VehicleId,
             Protocol = protocol,
             CreatedByUserId = int.Parse(userIdStr),
@@ -127,6 +121,9 @@ public class SessionsController : ControllerBase
         if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
             return BadRequest("Invalid payload");
 
+        if (req.Protocol != "OBDII" && req.Protocol != "KWP")
+            return BadRequest("Invalid protocol");
+
         var session = await _db.EcuReadSessions
             .FirstOrDefaultAsync(x => x.SessionId == sessionId);
 
@@ -142,7 +139,6 @@ public class SessionsController : ControllerBase
         int vehicleId = session.VehicleId;
         var now = DateTime.UtcNow;
 
-        // ===== 1️⃣ Load current DTCs in DB
         var currentDbDtcs = await _db.EcuDtcCurrent
             .Where(x => x.VehicleId == vehicleId)
             .ToListAsync();
@@ -154,7 +150,7 @@ public class SessionsController : ControllerBase
             .Select(x => x.DtcCode.Trim())
             .ToHashSet();
 
-        // ===== 2️⃣ Remove DTC không còn tồn tại
+        // Remove DTC không còn tồn tại
         var toRemove = currentDbDtcs
             .Where(db => !incomingCodes.Contains(db.DtcCode))
             .ToList();
@@ -162,7 +158,6 @@ public class SessionsController : ControllerBase
         if (toRemove.Any())
             _db.EcuDtcCurrent.RemoveRange(toRemove);
 
-        // ===== 3️⃣ Upsert DTC mới / update
         foreach (var d in incomingDtcs)
         {
             if (string.IsNullOrWhiteSpace(d.DtcCode))
@@ -215,24 +210,20 @@ public class SessionsController : ControllerBase
             string.IsNullOrWhiteSpace(req.DeviceKey))
             return BadRequest("Invalid device payload");
 
-        // 1️⃣ Check device exists
         var device = await _db.Devices
             .FirstOrDefaultAsync(x => x.DeviceId == req.DeviceId && x.IsActive);
 
         if (device == null)
             return Unauthorized("Unknown device");
 
-        // 2️⃣ Validate key
         var expectedKey = _cfg[$"DeviceKeys:{req.DeviceId}"];
         if (string.IsNullOrWhiteSpace(expectedKey) ||
             expectedKey != req.DeviceKey)
             return Unauthorized("Invalid device key");
 
-        // 3️⃣ Update LastSeen
         device.LastSeenAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
-        // 4️⃣ Auto fail processing session > 5 phút (CHỈ của device này)
         var timeout = DateTime.UtcNow.AddMinutes(-5);
 
         var expired = await _db.EcuReadSessions
@@ -247,7 +238,6 @@ public class SessionsController : ControllerBase
         if (expired.Count > 0)
             await _db.SaveChangesAsync();
 
-        // 5️⃣ Lấy session pending của đúng device
         var session = await _db.EcuReadSessions
             .Where(x => x.DeviceId == req.DeviceId &&
                         x.Status == SessionStatus.Pending)
@@ -260,10 +250,12 @@ public class SessionsController : ControllerBase
         session.Status = SessionStatus.Processing;
         await _db.SaveChangesAsync();
 
+        // 🔥 Load Vehicle + VehicleModel
         var vehicle = await _db.Vehicles
+            .Include(v => v.VehicleModel)
             .FirstOrDefaultAsync(v => v.VehicleId == session.VehicleId);
 
-        if (vehicle == null)
+        if (vehicle == null || vehicle.VehicleModel == null)
         {
             session.Status = SessionStatus.Failed;
             await _db.SaveChangesAsync();
@@ -275,9 +267,9 @@ public class SessionsController : ControllerBase
             sessionId = session.SessionId,
             actionType = session.ActionType,
             protocol = session.Protocol,
-            brand = vehicle.Brand,
-            model = vehicle.Model,
-            year = vehicle.Year
+            brand = vehicle.VehicleModel.Brand,
+            model = vehicle.VehicleModel.Model,
+            year = vehicle.VehicleModel.Year
         });
     }
 

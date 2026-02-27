@@ -1,12 +1,14 @@
-﻿namespace VehicleDiag.Api.Models
+﻿namespace VehicleDiag.Api.Models;
+
+public class Vehicle
 {
-    public class Vehicle
-    {
-        public int VehicleId { get; set; }
-        public string Brand { get; set; } = "";
-        public string Model { get; set; } = "";
-        public int Year { get; set; }
-        public bool IsActive { get; set; }
-        public string? DeviceId { get; set; }
-    }
+    public int VehicleId { get; set; }
+
+    public int ModelId { get; set; }
+
+    public VehicleModel VehicleModel { get; set; } = null!;
+
+    public bool IsActive { get; set; }
+
+    public string? DeviceId { get; set; }
 }

@@ -73,7 +73,8 @@ public class MonitorController : ControllerBase
         var role = User.FindFirst(ClaimTypes.Role)?.Value;
         var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
-        IQueryable<Vehicle> query = _db.Vehicles
+        IQueryable<Vehicle> vehicleQuery = _db.Vehicles
+            .Include(v => v.VehicleModel)
             .Where(v => v.IsActive);
 
         if (role == "Viewer")
@@ -83,41 +84,60 @@ public class MonitorController : ControllerBase
                 .Select(x => x.VehicleId)
                 .ToListAsync();
 
-            query = query.Where(v => myVehicleIds.Contains(v.VehicleId));
+            vehicleQuery = vehicleQuery.Where(v => myVehicleIds.Contains(v.VehicleId));
         }
 
-        var vehicles = await query
-            .Include(v => v.VehicleModel)  
+        var vehicles = await vehicleQuery.ToListAsync();
+
+        if (!vehicles.Any())
+            return Ok(new List<object>());
+
+        var deviceIds = vehicles
+            .Where(v => !string.IsNullOrEmpty(v.DeviceId))
+            .Select(v => v.DeviceId)
+            .ToList();
+
+        // 🔥 Lấy telemetry mới nhất cho từng device
+        var latestTelemetry = await _db.Telemetry
+            .Where(t => deviceIds.Contains(t.DeviceId))
+            .GroupBy(t => t.DeviceId)
+            .Select(g => g
+                .OrderByDescending(x => x.CreatedAt)
+                .First())
             .ToListAsync();
 
-        var result = new List<object>();
+        // 🔥 Lấy danh sách xe có lỗi
+        var errorVehicleIds = await _db.EcuDtcCurrent
+            .Select(x => x.VehicleId)
+            .Distinct()
+            .ToListAsync();
 
-        foreach (var vehicle in vehicles)
-        {
-            if (string.IsNullOrWhiteSpace(vehicle.DeviceId))
-                continue;
-
-            var latest = await _db.Telemetry
-                .Where(t => t.DeviceId == vehicle.DeviceId)
-                .OrderByDescending(t => t.CreatedAt)
-                .FirstOrDefaultAsync();
-
-            if (latest == null)
-                continue;
-
-            result.Add(new
+        var result = vehicles
+            .Where(v => !string.IsNullOrEmpty(v.DeviceId))
+            .Select(v =>
             {
-                vehicle.VehicleId,
-                vehicle.PlateNumber,
-                Name = vehicle.VehicleModel != null
-                ? $"{vehicle.VehicleModel.Brand} {vehicle.VehicleModel.Model}"
-                : "Unknown Vehicle",
-                latest.Lat,
-                latest.Lng,
-                latest.EngineOn,
-                latest.CreatedAt
-            });
-        }
+                var latest = latestTelemetry
+                    .FirstOrDefault(t => t.DeviceId == v.DeviceId);
+
+                if (latest == null)
+                    return null;
+
+                return new
+                {
+                    v.VehicleId,
+                    v.PlateNumber,
+                    Name = v.VehicleModel != null
+                        ? $"{v.VehicleModel.Brand} {v.VehicleModel.Model}"
+                        : "Unknown Vehicle",
+
+                    latest.Lat,
+                    latest.Lng,
+                    EngineOn = latest.EngineOn ?? false,  // ⚠ vì bool?
+                    HasError = errorVehicleIds.Contains(v.VehicleId)
+                };
+            })
+            .Where(x => x != null)
+            .ToList();
 
         return Ok(result);
     }

@@ -108,6 +108,7 @@ public class MonitorController : ControllerBase
             result.Add(new
             {
                 vehicle.VehicleId,
+                vehicle.PlateNumber,
                 Name = $"{vehicle.VehicleModel.Brand} {vehicle.VehicleModel.Model}",
                 latest.Lat,
                 latest.Lng,

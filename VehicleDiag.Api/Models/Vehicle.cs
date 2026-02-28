@@ -11,4 +11,6 @@ public class Vehicle
     public bool IsActive { get; set; }
 
     public string? DeviceId { get; set; }
+
+    public string? PlateNumber { get; set; }
 }

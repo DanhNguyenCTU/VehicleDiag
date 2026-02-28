@@ -48,16 +48,18 @@ public class SystemController : ControllerBase
     // ================= VIEWER =================
     private async Task<IActionResult> GetViewerDevice(int userId)
     {
-        var vehicle = await _db.UserVehicles
-            .Where(uv => uv.UserId == userId)
-            .Select(uv => uv.Vehicle)
-            .Include(v => v.Device)
-            .FirstOrDefaultAsync();
+        var device = await (
+            from uv in _db.UserVehicles
+            join v in _db.Vehicles
+                on uv.VehicleId equals v.VehicleId
+            join d in _db.Devices
+                on v.DeviceId equals d.DeviceId
+            where uv.UserId == userId
+            select d
+        ).FirstOrDefaultAsync();
 
-        if (vehicle == null || vehicle.Device == null)
+        if (device == null)
             return NotFound("No device assigned to this user.");
-
-        var device = vehicle.Device;
 
         var online = device.LastSeenAt.HasValue &&
                      device.LastSeenAt > DateTime.UtcNow.AddSeconds(-30);

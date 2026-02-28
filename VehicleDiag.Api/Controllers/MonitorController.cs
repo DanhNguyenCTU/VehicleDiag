@@ -109,7 +109,9 @@ public class MonitorController : ControllerBase
             {
                 vehicle.VehicleId,
                 vehicle.PlateNumber,
-                Name = $"{vehicle.VehicleModel.Brand} {vehicle.VehicleModel.Model}",
+                Name = vehicle.VehicleModel != null
+                ? $"{vehicle.VehicleModel.Brand} {vehicle.VehicleModel.Model}"
+                : "Unknown Vehicle",
                 latest.Lat,
                 latest.Lng,
                 latest.EngineOn,

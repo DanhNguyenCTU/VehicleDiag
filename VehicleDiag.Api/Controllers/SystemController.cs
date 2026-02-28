@@ -17,7 +17,7 @@ public class SystemController : ControllerBase
     {
         _db = db;
     }
-
+    [AllowAnonymous]
     [HttpGet("health")]
     public IActionResult Health()
     {

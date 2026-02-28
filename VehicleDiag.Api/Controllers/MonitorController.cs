@@ -87,7 +87,7 @@ public class MonitorController : ControllerBase
         }
 
         var vehicles = await query
-            .Include(v => v.VehicleModel)   // 🔥 QUAN TRỌNG
+            .Include(v => v.VehicleModel)  
             .ToListAsync();
 
         var result = new List<object>();

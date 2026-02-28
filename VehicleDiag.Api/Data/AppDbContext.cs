@@ -93,9 +93,10 @@ public class AppDbContext : DbContext
 
         // Vehicle → Device (One to One logical, but FK stored in Vehicle)
         modelBuilder.Entity<Vehicle>()
-            .HasOne<Device>()
-            .WithMany()
+            .HasOne(v => v.Device)
+            .WithMany(d => d.Vehicles)
             .HasForeignKey(v => v.DeviceId)
+            .HasPrincipalKey(d => d.DeviceId)
             .OnDelete(DeleteBehavior.SetNull);
 
         // UserVehicle → AppUser
@@ -111,5 +112,6 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(x => x.VehicleId)
             .OnDelete(DeleteBehavior.Cascade);
+
     }
 }

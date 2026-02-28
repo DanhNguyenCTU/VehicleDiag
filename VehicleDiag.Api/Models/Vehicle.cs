@@ -12,5 +12,7 @@ public class Vehicle
 
     public string? DeviceId { get; set; }
 
+    public Device Device { get; set; } = null!;
+
     public string? PlateNumber { get; set; }
 }

@@ -7,7 +7,7 @@ using VehicleDiag.Api.Models;
 
 namespace VehicleDiag.Api.Controllers;
 
-[Authorize(Roles = "Viewer,Technician,Admin")]
+[Authorize(Roles = "Viewer,Admin")]
 [ApiController]
 [Route("api/monitor")]
 public class MonitorController : ControllerBase

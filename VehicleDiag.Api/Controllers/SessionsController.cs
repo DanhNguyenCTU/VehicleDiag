@@ -105,9 +105,20 @@ public class SessionsController : ControllerBase
 
     public record Esp32PendingReq(
         string DeviceId,
-        string DeviceKey,
         string Firmware
     );
+    private bool ValidateDeviceKey(string deviceId)
+    {
+        if (!Request.Headers.TryGetValue("DeviceKey", out var deviceKey))
+            return false;
+
+        var expectedKey = _cfg[$"DeviceKeys:{deviceId}"];
+
+        if (string.IsNullOrWhiteSpace(expectedKey))
+            return false;
+
+        return expectedKey == deviceKey;
+    }
 
     // =========================================================
     // ESP32 → SUBMIT DTCs
@@ -118,6 +129,7 @@ public class SessionsController : ControllerBase
        int sessionId,
        [FromBody] Esp32SubmitDtcsReq req)
     {
+
         if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
             return BadRequest("Invalid payload");
 
@@ -129,6 +141,9 @@ public class SessionsController : ControllerBase
 
         if (session == null)
             return NotFound("Session not found");
+
+        if (!ValidateDeviceKey(session.DeviceId))
+            return Unauthorized("Invalid device key");
 
         if (session.Status != SessionStatus.Processing)
             return BadRequest("Invalid session state");
@@ -205,21 +220,18 @@ public class SessionsController : ControllerBase
     [HttpPost("pending")]
     public async Task<IActionResult> GetPending([FromBody] Esp32PendingReq req)
     {
-        if (req == null ||
-            string.IsNullOrWhiteSpace(req.DeviceId) ||
-            string.IsNullOrWhiteSpace(req.DeviceKey))
-            return BadRequest("Invalid device payload");
+        if (req == null || string.IsNullOrWhiteSpace(req.DeviceId))
+            return BadRequest("Invalid payload");
+
+        // 🔐 Validate DeviceKey từ HEADER
+        if (!ValidateDeviceKey(req.DeviceId))
+            return Unauthorized("Invalid device key");
 
         var device = await _db.Devices
             .FirstOrDefaultAsync(x => x.DeviceId == req.DeviceId && x.IsActive);
 
         if (device == null)
             return Unauthorized("Unknown device");
-
-        var expectedKey = _cfg[$"DeviceKeys:{req.DeviceId}"];
-        if (string.IsNullOrWhiteSpace(expectedKey) ||
-            expectedKey != req.DeviceKey)
-            return Unauthorized("Invalid device key");
 
         device.LastSeenAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
@@ -250,7 +262,6 @@ public class SessionsController : ControllerBase
         session.Status = SessionStatus.Processing;
         await _db.SaveChangesAsync();
 
-        // 🔥 Load Vehicle + VehicleModel
         var vehicle = await _db.Vehicles
             .Include(v => v.VehicleModel)
             .FirstOrDefaultAsync(v => v.VehicleId == session.VehicleId);
@@ -291,6 +302,10 @@ public class SessionsController : ControllerBase
 
         if (session == null)
             return NotFound("Session not found");
+
+        // 🔐 Validate header
+        if (!ValidateDeviceKey(session.DeviceId))
+            return Unauthorized("Invalid device key");
 
         if (session.Status != SessionStatus.Processing)
             return BadRequest("Invalid session state");
@@ -336,6 +351,10 @@ public class SessionsController : ControllerBase
 
         if (session == null)
             return NotFound("Session not found");
+
+        // 🔐 Validate header
+        if (!ValidateDeviceKey(session.DeviceId))
+            return Unauthorized("Invalid device key");
 
         if (session.Status != SessionStatus.Processing)
             return BadRequest("Invalid session state");

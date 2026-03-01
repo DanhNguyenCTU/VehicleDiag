@@ -17,10 +17,8 @@ public class DevicesController : ControllerBase
     {
         _db = db;
     }
-
-    // ================= ONLINE DEVICES =================
-    [HttpGet("online")]
-    public async Task<IActionResult> GetOnlineDevices()
+    [HttpGet("all")]
+    public async Task<IActionResult> GetAllDevices()
     {
         var role = User.FindFirst(ClaimTypes.Role)?.Value;
         var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -33,13 +31,13 @@ public class DevicesController : ControllerBase
         var threshold = DateTime.UtcNow.AddSeconds(-30);
 
         if (role == "Viewer")
-            return await GetViewerOnlineDevices(userId, threshold);
+            return await GetViewerDevices(userId, threshold);
 
-        return await GetAdminTechOnlineDevices(threshold);
+        return await GetAdminTechDevices(threshold);
     }
 
     // ================= VIEWER =================
-    private async Task<IActionResult> GetViewerOnlineDevices(int userId, DateTime threshold)
+    private async Task<IActionResult> GetViewerDevices(int userId, DateTime threshold)
     {
         var devices = await (
             from uv in _db.UserVehicles.AsNoTracking()
@@ -49,13 +47,13 @@ public class DevicesController : ControllerBase
                 on v.DeviceId equals d.DeviceId
             where uv.UserId == userId
                && d.IsActive
-               && d.LastSeenAt.HasValue
-               && d.LastSeenAt > threshold
             select new
             {
                 deviceId = d.DeviceId,
                 vehicleName = v.PlateNumber,
-                lastSeenAt = d.LastSeenAt
+                lastSeenAt = d.LastSeenAt,
+                isOnline = d.LastSeenAt.HasValue
+                           && d.LastSeenAt > threshold
             }
         ).ToListAsync();
 
@@ -63,20 +61,20 @@ public class DevicesController : ControllerBase
     }
 
     // ================= ADMIN / TECH =================
-    private async Task<IActionResult> GetAdminTechOnlineDevices(DateTime threshold)
+    private async Task<IActionResult> GetAdminTechDevices(DateTime threshold)
     {
         var devices = await (
             from d in _db.Devices.AsNoTracking()
             join v in _db.Vehicles.AsNoTracking()
                 on d.DeviceId equals v.DeviceId
-            where d.IsActive                      
-               && d.LastSeenAt.HasValue
-               && d.LastSeenAt > threshold
+            where d.IsActive
             select new
             {
                 deviceId = d.DeviceId,
                 vehicleName = v.PlateNumber,
-                lastSeenAt = d.LastSeenAt
+                lastSeenAt = d.LastSeenAt,
+                isOnline = d.LastSeenAt.HasValue
+                           && d.LastSeenAt > threshold
             }
         ).ToListAsync();
 

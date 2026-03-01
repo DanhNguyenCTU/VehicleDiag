@@ -107,17 +107,18 @@ public class SessionsController : ControllerBase
         string DeviceId,
         string Firmware
     );
-    private bool ValidateDeviceKey(string deviceId)
+    private async Task<bool> ValidateDeviceKeyAsync(string deviceId)
     {
         if (!Request.Headers.TryGetValue("DeviceKey", out var deviceKey))
             return false;
 
-        var expectedKey = _cfg[$"DeviceKeys:{deviceId}"];
+        var device = await _db.Devices
+            .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
 
-        if (string.IsNullOrWhiteSpace(expectedKey))
+        if (device == null)
             return false;
 
-        return expectedKey == deviceKey;
+        return device.DeviceKey == deviceKey;
     }
 
     // =========================================================
@@ -142,7 +143,7 @@ public class SessionsController : ControllerBase
         if (session == null)
             return NotFound("Session not found");
 
-        if (!ValidateDeviceKey(session.DeviceId))
+        if (!await ValidateDeviceKeyAsync(session.DeviceId))
             return Unauthorized("Invalid device key");
 
         if (session.Status != SessionStatus.Processing)
@@ -223,15 +224,14 @@ public class SessionsController : ControllerBase
         if (req == null || string.IsNullOrWhiteSpace(req.DeviceId))
             return BadRequest("Invalid payload");
 
-        // 🔐 Validate DeviceKey từ HEADER
-        if (!ValidateDeviceKey(req.DeviceId))
-            return Unauthorized("Invalid device key");
-
         var device = await _db.Devices
             .FirstOrDefaultAsync(x => x.DeviceId == req.DeviceId && x.IsActive);
 
         if (device == null)
             return Unauthorized("Unknown device");
+
+        if (!await ValidateDeviceKeyAsync(req.DeviceId))
+            return Unauthorized("Invalid device key");
 
         device.LastSeenAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
@@ -303,8 +303,7 @@ public class SessionsController : ControllerBase
         if (session == null)
             return NotFound("Session not found");
 
-        // 🔐 Validate header
-        if (!ValidateDeviceKey(session.DeviceId))
+        if (!await ValidateDeviceKeyAsync(session.DeviceId))
             return Unauthorized("Invalid device key");
 
         if (session.Status != SessionStatus.Processing)
@@ -352,8 +351,7 @@ public class SessionsController : ControllerBase
         if (session == null)
             return NotFound("Session not found");
 
-        // 🔐 Validate header
-        if (!ValidateDeviceKey(session.DeviceId))
+        if (!await ValidateDeviceKeyAsync(session.DeviceId))
             return Unauthorized("Invalid device key");
 
         if (session.Status != SessionStatus.Processing)

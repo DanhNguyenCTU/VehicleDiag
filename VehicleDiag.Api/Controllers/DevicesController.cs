@@ -106,4 +106,33 @@ public class DevicesController : ControllerBase
 
         return Ok(devices);
     }
+    // ================= DEVICE STATUS BY VEHICLE =================
+    [Authorize(Roles = "Technician,Admin")]
+    [HttpGet("vehicle/{vehicleId:int}/status")]
+    public async Task<IActionResult> GetVehicleDeviceStatus(int vehicleId)
+    {
+        var threshold = DateTime.UtcNow.AddSeconds(-30);
+
+        var result = await (
+            from v in _db.Vehicles.AsNoTracking()
+            join d in _db.Devices.AsNoTracking()
+                on v.DeviceId equals d.DeviceId
+            where v.VehicleId == vehicleId
+               && v.IsActive
+               && d.IsActive
+            select new
+            {
+                vehicleId = v.VehicleId,
+                deviceId = d.DeviceId,
+                lastSeenAt = d.LastSeenAt,
+                isOnline = d.LastSeenAt.HasValue &&
+                           d.LastSeenAt > threshold
+            }
+        ).FirstOrDefaultAsync();
+
+        if (result == null)
+            return NotFound("Vehicle or device not found");
+
+        return Ok(result);
+    }
 }

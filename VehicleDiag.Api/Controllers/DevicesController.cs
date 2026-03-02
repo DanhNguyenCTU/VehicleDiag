@@ -51,6 +51,7 @@ public class DevicesController : ControllerBase
 
             where uv.UserId == userId
                && d.IsActive
+               && v.IsActive
 
             select new
             {
@@ -84,6 +85,7 @@ public class DevicesController : ControllerBase
             from vm in vmJoin.DefaultIfEmpty()
 
             where d.IsActive
+               && v.IsActive
 
             select new
             {

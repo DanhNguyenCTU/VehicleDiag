@@ -45,13 +45,25 @@ public class DevicesController : ControllerBase
                 on uv.VehicleId equals v.VehicleId
             join d in _db.Devices.AsNoTracking()
                 on v.DeviceId equals d.DeviceId
+            join vm in _db.VehicleModels.AsNoTracking()
+                on v.ModelId equals vm.ModelId into vmJoin
+            from vm in vmJoin.DefaultIfEmpty()
+
             where uv.UserId == userId
                && d.IsActive
+
             select new
             {
                 deviceId = d.DeviceId,
-                vehicleName = v.PlateNumber,
+
+                vehicleName =
+                    (vm != null
+                        ? vm.Brand + " " + vm.Model + " " + vm.Year
+                        : "")
+                    + " - " + v.PlateNumber,
+
                 lastSeenAt = d.LastSeenAt,
+
                 isOnline = d.LastSeenAt.HasValue
                            && d.LastSeenAt > threshold
             }
@@ -67,12 +79,24 @@ public class DevicesController : ControllerBase
             from d in _db.Devices.AsNoTracking()
             join v in _db.Vehicles.AsNoTracking()
                 on d.DeviceId equals v.DeviceId
+            join vm in _db.VehicleModels.AsNoTracking()
+                on v.ModelId equals vm.ModelId into vmJoin
+            from vm in vmJoin.DefaultIfEmpty()
+
             where d.IsActive
+
             select new
             {
                 deviceId = d.DeviceId,
-                vehicleName = v.PlateNumber,
+
+                vehicleName =
+                    (vm != null
+                        ? vm.Brand + " " + vm.Model + " " + vm.Year
+                        : "")
+                    + " - " + v.PlateNumber,
+
                 lastSeenAt = d.LastSeenAt,
+
                 isOnline = d.LastSeenAt.HasValue
                            && d.LastSeenAt > threshold
             }

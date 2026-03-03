@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<EcuReadSession> EcuReadSessions => Set<EcuReadSession>();
     public DbSet<EcuInfoResult> EcuInfoResults => Set<EcuInfoResult>();
     public DbSet<EcuDtcResult> EcuDtcResults => Set<EcuDtcResult>();
+    public DbSet<EcuDtcHistory> EcuDtcHistory => Set<EcuDtcHistory>();
     public DbSet<EcuDtcCurrent> EcuDtcCurrent => Set<EcuDtcCurrent>();
     public DbSet<DtcDictionary> DtcDictionary => Set<DtcDictionary>();
     public DbSet<UserVehicle> UserVehicles => Set<UserVehicle>();
@@ -68,6 +69,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<EcuDtcResult>()
             .ToTable("EcuDtcResult")
+            .HasKey(x => x.Id);
+        modelBuilder.Entity<EcuDtcHistory>()
+            .ToTable("EcuDtcHistory")
             .HasKey(x => x.Id);
 
         modelBuilder.Entity<EcuDtcCurrent>()

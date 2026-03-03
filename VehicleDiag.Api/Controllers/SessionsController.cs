@@ -127,10 +127,9 @@ public class SessionsController : ControllerBase
     [AllowAnonymous]
     [HttpPost("{sessionId:int}/dtcs")]
     public async Task<IActionResult> SubmitDtcsFromEsp32(
-       int sessionId,
-       [FromBody] Esp32SubmitDtcsReq req)
+        int sessionId,
+        [FromBody] Esp32SubmitDtcsReq req)
     {
-
         if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
             return BadRequest("Invalid payload");
 
@@ -155,10 +154,6 @@ public class SessionsController : ControllerBase
         int vehicleId = session.VehicleId;
         var now = DateTime.UtcNow;
 
-        var currentDbDtcs = await _db.EcuDtcCurrent
-            .Where(x => x.VehicleId == vehicleId)
-            .ToListAsync();
-
         var incomingDtcs = req.Dtcs ?? new List<Esp32DtcItem>();
 
         var incomingCodes = incomingDtcs
@@ -166,14 +161,30 @@ public class SessionsController : ControllerBase
             .Select(x => x.DtcCode.Trim())
             .ToHashSet();
 
-        // Remove DTC không còn tồn tại
-        var toRemove = currentDbDtcs
-            .Where(db => !incomingCodes.Contains(db.DtcCode))
-            .ToList();
+        var currentDbDtcs = await _db.EcuDtcCurrent
+            .Where(x => x.VehicleId == vehicleId)
+            .ToListAsync();
 
-        if (toRemove.Any())
-            _db.EcuDtcCurrent.RemoveRange(toRemove);
+        var openHistory = await _db.EcuDtcHistory
+            .Where(x => x.VehicleId == vehicleId && x.ClearedAt == null)
+            .ToListAsync();
 
+        // ================= REMOVE LỖI ĐÃ BIẾN MẤT =================
+        foreach (var cur in currentDbDtcs)
+        {
+            if (!incomingCodes.Contains(cur.DtcCode))
+            {
+                _db.EcuDtcCurrent.Remove(cur);
+
+                var history = openHistory
+                    .FirstOrDefault(x => x.DtcCode == cur.DtcCode);
+
+                if (history != null)
+                    history.ClearedAt = now;
+            }
+        }
+
+        // ================= INSERT / UPDATE =================
         foreach (var d in incomingDtcs)
         {
             if (string.IsNullOrWhiteSpace(d.DtcCode))
@@ -181,6 +192,7 @@ public class SessionsController : ControllerBase
 
             var code = d.DtcCode.Trim();
 
+            // Lưu Result (session history cho Tech)
             _db.EcuDtcResults.Add(new EcuDtcResult
             {
                 SessionId = sessionId,
@@ -189,11 +201,12 @@ public class SessionsController : ControllerBase
                 Protocol = req.Protocol
             });
 
-            var existing = currentDbDtcs
+            var existingCurrent = currentDbDtcs
                 .FirstOrDefault(x => x.DtcCode == code);
 
-            if (existing == null)
+            if (existingCurrent == null)
             {
+                // Thêm vào Current
                 _db.EcuDtcCurrent.Add(new EcuDtcCurrent
                 {
                     VehicleId = vehicleId,
@@ -201,15 +214,32 @@ public class SessionsController : ControllerBase
                     StatusByte = d.StatusByte,
                     LastSeenAt = now
                 });
+
+                // Thêm vào History
+                _db.EcuDtcHistory.Add(new EcuDtcHistory
+                {
+                    VehicleId = vehicleId,
+                    DtcCode = code,
+                    StatusByte = d.StatusByte,
+                    FirstSeenAt = now,
+                    LastSeenAt = now
+                });
             }
             else
             {
-                existing.StatusByte = d.StatusByte;
-                existing.LastSeenAt = now;
+                existingCurrent.StatusByte = d.StatusByte;
+                existingCurrent.LastSeenAt = now;
+
+                var history = openHistory
+                    .FirstOrDefault(x => x.DtcCode == code);
+
+                if (history != null)
+                    history.LastSeenAt = now;
             }
         }
 
         await _db.SaveChangesAsync();
+
         return Ok(new { ok = true });
     }
 

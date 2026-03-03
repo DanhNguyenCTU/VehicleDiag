@@ -42,12 +42,12 @@ namespace VehicleDiag.Api.Controllers
             if (req == null)
                 return BadRequest();
 
-            // 1️⃣ Xác thực device bằng DeviceKey
+            //  Xác thực device bằng DeviceKey
             var device = await ValidateDeviceAsync();
             if (device == null)
                 return Unauthorized();
 
-            // 2️⃣ Lưu telemetry
+            //  Lưu telemetry
             _db.Telemetry.Add(new Telemetry
             {
                 DeviceId = device.DeviceId,   

@@ -7,7 +7,7 @@ using VehicleDiag.Api.Models;
 
 namespace VehicleDiag.Api.Controllers;
 
-[Authorize(Roles = "Viewer,Admin")]
+[Authorize(Roles = "Viewer,Admin,Technician")]
 [ApiController]
 [Route("api/monitor")]
 public class MonitorController : ControllerBase
@@ -145,6 +145,44 @@ public class MonitorController : ControllerBase
             .ToList();
 
         return Ok(result);
+    }
+    [HttpGet("my-vehicles/dtc-history")]
+    public async Task<IActionResult> GetMyVehiclesHistory()
+    {
+        var role = User.FindFirst(ClaimTypes.Role)?.Value;
+        var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+
+        IQueryable<int> vehicleIds;
+
+        if (role == "Viewer")
+        {
+            vehicleIds = _db.UserVehicles
+                .Where(x => x.UserId == userId)
+                .Select(x => x.VehicleId);
+        }
+        else if (role == "Admin" || role == "Technician")
+        {
+            vehicleIds = _db.Vehicles.Select(x => x.VehicleId);
+        }
+        else
+        {
+            return Forbid();
+        }
+
+        var history = await _db.EcuDtcHistory
+            .Where(x => vehicleIds.Contains(x.VehicleId))
+            .Select(x => new
+            {
+                x.VehicleId,
+                x.DtcCode,
+                x.FirstSeenAt,
+                x.LastSeenAt,
+                x.ClearedAt
+            })
+            .OrderByDescending(x => x.FirstSeenAt)
+            .ToListAsync();
+
+        return Ok(history);
     }
 
     [HttpGet("vehicle/{vehicleId:int}/dtc")]

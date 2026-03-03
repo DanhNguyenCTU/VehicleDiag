@@ -25,8 +25,10 @@ namespace VehicleDiag.Api.Controllers
         // ===== Lấy Device từ DeviceKey header =====
         private async Task<Device?> ValidateDeviceAsync()
         {
-            if (!Request.Headers.TryGetValue("DeviceKey", out var deviceKey))
+            if (!Request.Headers.TryGetValue("DeviceKey", out var deviceKeyValues))
                 return null;
+
+            var deviceKey = deviceKeyValues.ToString();
 
             return await _db.Devices
                 .FirstOrDefaultAsync(x =>

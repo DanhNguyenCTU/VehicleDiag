@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using VehicleDiag.Api.Data;
 using Microsoft.EntityFrameworkCore;
+using VehicleDiag.Api.Data;
+using VehicleDiag.Api.Models;
 
 namespace VehicleDiag.Api.Controllers
 {
@@ -15,54 +16,51 @@ namespace VehicleDiag.Api.Controllers
             _db = db;
         }
 
+  
         public record TelemetryRequest(
-            string DeviceId,
             double Lat,
             double Lng
         );
 
-        private async Task<bool> ValidateDeviceKeyAsync(string deviceId)
+        // ===== Lấy Device từ DeviceKey header =====
+        private async Task<Device?> ValidateDeviceAsync()
         {
             if (!Request.Headers.TryGetValue("DeviceKey", out var deviceKey))
-                return false;
+                return null;
 
-            var device = await _db.Devices
-                .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
-
-            if (device == null)
-                return false;
-
-            return device.DeviceKey == deviceKey;
+            return await _db.Devices
+                .FirstOrDefaultAsync(x =>
+                    x.DeviceKey == deviceKey &&
+                    x.IsActive);
         }
 
         [HttpPost]
         public async Task<IActionResult> Submit([FromBody] TelemetryRequest req)
         {
-            if (req == null || string.IsNullOrWhiteSpace(req.DeviceId))
+            if (req == null)
                 return BadRequest();
 
-            if (!await ValidateDeviceKeyAsync(req.DeviceId))
+            // 1️⃣ Xác thực device bằng DeviceKey
+            var device = await ValidateDeviceAsync();
+            if (device == null)
                 return Unauthorized();
 
-            var entity = new Telemetry
+            // 2️⃣ Lưu telemetry
+            _db.Telemetry.Add(new Telemetry
             {
-                DeviceId = req.DeviceId,
+                DeviceId = device.DeviceId,   
                 Lat = req.Lat,
                 Lng = req.Lng,
                 CreatedAt = DateTime.UtcNow
-            };
+            });
 
-            _db.Telemetry.Add(entity);
-
-            var device = await _db.Devices
-                .FirstOrDefaultAsync(d => d.DeviceId == req.DeviceId);
-
-            if (device != null)
-                device.LastSeenAt = DateTime.UtcNow;
+            
+            device.LastSeenAt = DateTime.UtcNow;
 
             await _db.SaveChangesAsync();
 
-            return Ok(new { ok = true });
+          
+            return NoContent();
         }
     }
 }

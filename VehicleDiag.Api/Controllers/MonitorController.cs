@@ -60,7 +60,6 @@ public class MonitorController : ControllerBase
         {
             latest.Lat,
             latest.Lng,
-            latest.EngineOn,
             latest.CreatedAt
         });
     }
@@ -71,6 +70,8 @@ public class MonitorController : ControllerBase
     public async Task<IActionResult> GetMyVehiclesLocation()
     {
         var role = User.FindFirst(ClaimTypes.Role)?.Value;
+        if (role == "Technician")
+            return Forbid();
         var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
         IQueryable<Vehicle> vehicleQuery = _db.Vehicles
@@ -85,6 +86,11 @@ public class MonitorController : ControllerBase
                 .ToListAsync();
 
             vehicleQuery = vehicleQuery.Where(v => myVehicleIds.Contains(v.VehicleId));
+        }
+        else if (role == "Technician")
+        {
+            // Technician không được xem vị trí
+            return Forbid();
         }
 
         var vehicles = await vehicleQuery.ToListAsync();
@@ -132,7 +138,6 @@ public class MonitorController : ControllerBase
 
                     latest.Lat,
                     latest.Lng,
-                    EngineOn = latest.EngineOn ?? false,  // ⚠ vì bool?
                     HasError = errorVehicleIds.Contains(v.VehicleId)
                 };
             })

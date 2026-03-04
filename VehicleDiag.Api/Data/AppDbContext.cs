@@ -24,6 +24,8 @@ public class AppDbContext : DbContext
     public DbSet<DtcDictionary> DtcDictionary => Set<DtcDictionary>();
     public DbSet<UserVehicle> UserVehicles => Set<UserVehicle>();
 
+    public DbSet<DtcLog> DtcLogs { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // ================= TABLE MAPPING =================
@@ -85,6 +87,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<UserVehicle>()
             .ToTable("UserVehicle")
             .HasKey(x => x.Id);
+
+        modelBuilder.Entity<DtcLog>()
+            .ToTable("DtcLog")
+            .HasKey(x => x.Id);
+
+        modelBuilder.Entity<DtcLog>()
+            .HasOne(x => x.Device)
+            .WithMany()
+            .HasForeignKey(x => x.DeviceId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         // ================= RELATIONSHIPS =================
 

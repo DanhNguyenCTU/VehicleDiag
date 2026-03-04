@@ -16,10 +16,16 @@ namespace VehicleDiag.Api.Controllers
             _db = db;
         }
 
-  
+
+        public record DtcDto(
+            string DtcCode,
+            int StatusByte
+        );
+
         public record TelemetryRequest(
             double Lat,
-            double Lng
+            double Lng,
+            List<DtcDto>? Dtcs
         );
 
         // ===== Lấy Device từ DeviceKey header =====
@@ -42,26 +48,41 @@ namespace VehicleDiag.Api.Controllers
             if (req == null)
                 return BadRequest();
 
-            //  Xác thực device bằng DeviceKey
             var device = await ValidateDeviceAsync();
             if (device == null)
                 return Unauthorized();
 
-            //  Lưu telemetry
+            var now = DateTime.UtcNow;
+
+            // Lưu telemetry
             _db.Telemetry.Add(new Telemetry
             {
-                DeviceId = device.DeviceId,   
+                DeviceId = device.DeviceId,
                 Lat = req.Lat,
                 Lng = req.Lng,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = now
             });
 
-            
-            device.LastSeenAt = DateTime.UtcNow;
+            // Lưu DTC nếu có
+            if (req.Dtcs != null && req.Dtcs.Any())
+            {
+                foreach (var d in req.Dtcs)
+                {
+                    _db.DtcLogs.Add(new DtcLog
+                    {
+                        DeviceId = device.DeviceId,
+                        DtcCode = d.DtcCode,
+                        StatusByte = d.StatusByte,
+                        Source = "AUTO",
+                        CreatedAt = now
+                    });
+                }
+            }
+
+            device.LastSeenAt = now;
 
             await _db.SaveChangesAsync();
 
-          
             return NoContent();
         }
     }

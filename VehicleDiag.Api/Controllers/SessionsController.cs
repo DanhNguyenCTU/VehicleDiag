@@ -100,7 +100,7 @@ public class SessionsController : ControllerBase
         _db.EcuReadSessions.Add(session);
         await _db.SaveChangesAsync();
 
-        return Ok(new { sessionId = session.SessionId });
+        return Ok(new { SessionId = session.SessionId });
     }
 
     public record Esp32PendingReq(
@@ -275,7 +275,10 @@ public class SessionsController : ControllerBase
             .ToListAsync();
 
         foreach (var s in expired)
+        {
             s.Status = SessionStatus.Failed;
+            s.CompletedAt = DateTime.UtcNow;
+        }
 
         if (expired.Count > 0)
             await _db.SaveChangesAsync();
@@ -299,6 +302,7 @@ public class SessionsController : ControllerBase
         if (vehicle == null || vehicle.VehicleModel == null)
         {
             session.Status = SessionStatus.Failed;
+            session.CompletedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync();
             return BadRequest("Vehicle not found");
         }
@@ -393,4 +397,86 @@ public class SessionsController : ControllerBase
         await _db.SaveChangesAsync();
         return Ok(new { ok = true });
     }
+    // =========================================================
+    // UI → GET SESSION DTCs
+    // =========================================================
+    [HttpGet("{sessionId:int}/dtcs")]
+    public async Task<IActionResult> GetSessionDtcs(int sessionId)
+    {
+        var session = await _db.EcuReadSessions
+            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+
+        if (session == null)
+            return NotFound("Session not found");
+
+        if (session.Status != SessionStatus.Completed)
+            return BadRequest("Session not completed");
+
+        var dtcs = await _db.EcuDtcResults
+            .Where(x => x.SessionId == sessionId)
+            .OrderBy(x => x.Id)
+            .Select(x => new
+            {
+                x.DtcCode,
+                x.StatusByte,
+                x.Protocol
+            })
+            .ToListAsync();
+
+        return Ok(dtcs);
+    }
+    // =========================================================
+    // UI → GET SESSION INFO
+    // =========================================================
+    [HttpGet("{sessionId:int}/info")]
+    public async Task<IActionResult> GetSessionInfo(int sessionId)
+    {
+        var session = await _db.EcuReadSessions
+            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+
+        if (session == null)
+            return NotFound("Session not found");
+        if (session.Status != SessionStatus.Completed)
+            return BadRequest("Session not completed");
+
+        var info = await _db.EcuInfoResults
+            .Where(x => x.SessionId == sessionId)
+            .OrderBy(x => x.Id)
+            .Select(x => new
+            {
+                x.InfoKey,
+                x.InfoValue
+            })
+            .ToListAsync();
+
+        return Ok(info);
+    }
+    public record SessionStatusDto(
+        int SessionId,
+        string Status,
+        DateTime CreatedAt,
+        DateTime? CompletedAt
+    );
+    // =========================================================
+    // UI → GET SESSION STATUS
+    // =========================================================
+    [HttpGet("{sessionId:int}/status")]
+    public async Task<IActionResult> GetSessionStatus(int sessionId)
+    {
+        var session = await _db.EcuReadSessions
+            .Where(x => x.SessionId == sessionId)
+            .Select(x => new SessionStatusDto(
+                x.SessionId,
+                x.Status,
+                x.CreatedAt,
+                x.CompletedAt
+            ))
+            .FirstOrDefaultAsync();
+
+        if (session == null)
+            return NotFound("Session not found");
+
+        return Ok(session);
+    }
+
 }

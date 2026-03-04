@@ -52,9 +52,15 @@ namespace VehicleDiag.Api.Controllers
             if (device == null)
                 return Unauthorized();
 
+            var vehicle = await _db.Vehicles
+                .FirstOrDefaultAsync(v => v.DeviceId == device.DeviceId);
+
+            if (vehicle == null)
+                return BadRequest("Device not bound to vehicle");
+
             var now = DateTime.UtcNow;
 
-            // Lưu telemetry
+            // ================== 1. Lưu Telemetry ==================
             _db.Telemetry.Add(new Telemetry
             {
                 DeviceId = device.DeviceId,
@@ -63,23 +69,77 @@ namespace VehicleDiag.Api.Controllers
                 CreatedAt = now
             });
 
-            // Lưu DTC nếu có
-            if (req.Dtcs != null && req.Dtcs.Any())
+            device.LastSeenAt = now;
+
+            // ================== 2. Xử lý DTC Snapshot ==================
+
+            var incomingDtcs = req.Dtcs ?? new List<DtcDto>();
+
+            var currentDbDtcs = await _db.EcuDtcCurrent
+                .Where(x => x.VehicleId == vehicle.VehicleId)
+                .ToListAsync();
+
+            var openHistories = await _db.EcuDtcHistory
+                .Where(h => h.VehicleId == vehicle.VehicleId &&
+                            h.ClearedAt == null)
+                .ToListAsync();
+
+            var currentDict = currentDbDtcs.ToDictionary(x => x.DtcCode);
+            var historyDict = openHistories.ToDictionary(x => x.DtcCode);
+
+            var incomingCodes = incomingDtcs
+                .Select(x => x.DtcCode)
+                .ToHashSet();
+
+            // ===== A. Lỗi mới & update =====
+            foreach (var dtc in incomingDtcs)
             {
-                foreach (var d in req.Dtcs)
+                if (!currentDict.TryGetValue(dtc.DtcCode, out var existing))
                 {
-                    _db.DtcLogs.Add(new DtcLog
+                    // 🔥 Lỗi mới
+                    _db.EcuDtcCurrent.Add(new EcuDtcCurrent
                     {
-                        DeviceId = device.DeviceId,
-                        DtcCode = d.DtcCode,
-                        StatusByte = d.StatusByte,
-                        Source = "AUTO",
-                        CreatedAt = now
+                        VehicleId = vehicle.VehicleId,
+                        DtcCode = dtc.DtcCode,
+                        StatusByte = dtc.StatusByte,
+                        LastSeenAt = now
                     });
+
+                    _db.EcuDtcHistory.Add(new EcuDtcHistory
+                    {
+                        VehicleId = vehicle.VehicleId,
+                        DtcCode = dtc.DtcCode,
+                        StatusByte = dtc.StatusByte,
+                        FirstSeenAt = now,
+                        LastSeenAt = now
+                    });
+                }
+                else
+                {
+                    // 🔥 Vẫn còn lỗi
+                    existing.StatusByte = dtc.StatusByte;
+                    existing.LastSeenAt = now;
+
+                    if (historyDict.TryGetValue(dtc.DtcCode, out var history))
+                    {
+                        history.LastSeenAt = now;
+                    }
                 }
             }
 
-            device.LastSeenAt = now;
+            // ===== B. Lỗi đã clear =====
+            foreach (var dbDtc in currentDbDtcs)
+            {
+                if (!incomingCodes.Contains(dbDtc.DtcCode))
+                {
+                    if (historyDict.TryGetValue(dbDtc.DtcCode, out var history))
+                    {
+                        history.ClearedAt = now;
+                    }
+
+                    _db.EcuDtcCurrent.Remove(dbDtc);
+                }
+            }
 
             await _db.SaveChangesAsync();
 

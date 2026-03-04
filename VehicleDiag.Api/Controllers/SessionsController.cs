@@ -412,16 +412,21 @@ public class SessionsController : ControllerBase
         if (session.Status != SessionStatus.Completed)
             return BadRequest("Session not completed");
 
-        var dtcs = await _db.EcuDtcResults
-            .Where(x => x.SessionId == sessionId)
-            .OrderBy(x => x.Id)
-            .Select(x => new
+        var dtcs = await (
+            from r in _db.EcuDtcResults
+            join d in _db.DtcDictionary
+                on r.DtcCode equals d.DtcCode into dict
+            from d in dict.DefaultIfEmpty()
+            where r.SessionId == sessionId
+            orderby r.Id
+            select new
             {
-                x.DtcCode,
-                x.StatusByte,
-                x.Protocol
-            })
-            .ToListAsync();
+                Code = r.DtcCode,
+                Description = d.Description ?? "Unknown DTC",
+                StatusByte = r.StatusByte,
+                Protocol = r.Protocol
+            }
+        ).ToListAsync();
 
         return Ok(dtcs);
     }
@@ -436,6 +441,7 @@ public class SessionsController : ControllerBase
 
         if (session == null)
             return NotFound("Session not found");
+
         if (session.Status != SessionStatus.Completed)
             return BadRequest("Session not completed");
 
@@ -444,8 +450,8 @@ public class SessionsController : ControllerBase
             .OrderBy(x => x.Id)
             .Select(x => new
             {
-                x.InfoKey,
-                x.InfoValue
+                Field = x.InfoKey,
+                Value = x.InfoValue
             })
             .ToListAsync();
 

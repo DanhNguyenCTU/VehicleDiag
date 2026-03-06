@@ -169,18 +169,22 @@ public class MonitorController : ControllerBase
             return Forbid();
         }
 
-        var history = await _db.EcuDtcHistory
-            .Where(x => vehicleIds.Contains(x.VehicleId))
-            .Select(x => new
+        var history = await (
+            from h in _db.EcuDtcHistory
+            join v in _db.Vehicles
+                on h.VehicleId equals v.VehicleId
+            where vehicleIds.Contains(h.VehicleId)
+            orderby h.FirstSeenAt descending
+            select new
             {
-                x.VehicleId,
-                x.DtcCode,
-                x.FirstSeenAt,
-                x.LastSeenAt,
-                x.ClearedAt
-            })
-            .OrderByDescending(x => x.FirstSeenAt)
-            .ToListAsync();
+                h.VehicleId,
+                v.PlateNumber,
+                h.DtcCode,
+                h.FirstSeenAt,
+                h.LastSeenAt,
+                h.ClearedAt
+            }
+        ).ToListAsync();
 
         return Ok(history);
     }

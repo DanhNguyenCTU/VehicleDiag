@@ -104,7 +104,6 @@ public class SessionsController : ControllerBase
     // =========================================================
     // UI → GET SESSION DTCs
     // =========================================================
-
     [HttpGet("{sessionId:int}/dtcs")]
     public async Task<IActionResult> GetSessionDtcs(int sessionId)
     {
@@ -114,7 +113,9 @@ public class SessionsController : ControllerBase
         if (session == null)
             return NotFound("Session not found");
 
-        if (session.Status != SessionStatus.Completed)
+        if (!string.Equals(session.Status,
+            SessionStatus.Completed,
+            StringComparison.OrdinalIgnoreCase))
             return BadRequest("Session not completed");
 
         var dtcs = await (
@@ -149,7 +150,9 @@ public class SessionsController : ControllerBase
         if (session == null)
             return NotFound("Session not found");
 
-        if (session.Status != SessionStatus.Completed)
+        if (!string.Equals(session.Status,
+            SessionStatus.Completed,
+            StringComparison.OrdinalIgnoreCase))
             return BadRequest("Session not completed");
 
         var info = await _db.EcuInfoResults

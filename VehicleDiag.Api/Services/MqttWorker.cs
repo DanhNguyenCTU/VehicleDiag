@@ -104,7 +104,12 @@ namespace VehicleDiag.Api.Services
 
         private async Task HandleTelemetry(string deviceId, string payload, AppDbContext db)
         {
-            var data = JsonSerializer.Deserialize<TelemetryPayload>(payload);
+            var data = JsonSerializer.Deserialize<TelemetryPayload>(
+                payload,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+            });
 
             if (data == null)
                 return;

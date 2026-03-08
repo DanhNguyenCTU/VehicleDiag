@@ -87,6 +87,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 builder.Services.AddHostedService<MqttWorker>();
+builder.Services.AddSingleton<IMqttPublishService, MqttPublishService>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

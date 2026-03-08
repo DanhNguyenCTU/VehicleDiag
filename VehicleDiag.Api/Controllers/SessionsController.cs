@@ -7,7 +7,7 @@ using VehicleDiag.Api.Services;
 using VehicleDiag.Api.Dtos.Requests;
 using VehicleDiag.Api.Models;
 using VehicleDiag.Api.Constants;
-using System.Linq;
+
 namespace VehicleDiag.Api.Controllers;
 
 [Authorize(Roles = "Technician,Admin")]
@@ -16,45 +16,23 @@ namespace VehicleDiag.Api.Controllers;
 public class SessionsController : ControllerBase
 {
     private readonly AppDbContext _db;
-    private readonly IConfiguration _cfg;
-    public SessionsController(AppDbContext db, IConfiguration cfg)
+    private readonly IMqttPublishService _mqtt;
+
+    public SessionsController(AppDbContext db, IMqttPublishService mqtt)
     {
         _db = db;
-        _cfg = cfg;
+        _mqtt = mqtt;
     }
 
-    // =========================
-    // ESP32 DTOs
-    // =========================
-    public record Esp32DtcItem(string DtcCode, byte StatusByte);
-    public record Esp32SubmitDtcsReq(
-    string Protocol,
-    List<Esp32DtcItem>? Dtcs
-);
-
-
-    public record Esp32SubmitInfoReq(
-        string? Protocol,
-        string? Vin,
-        string? CalId,
-        string? Cvn,
-        string? Hardware
-    );
-
-    public record Esp32SubmitInfoKvReq(
-        string Protocol,
-        string InfoKey,
-        string InfoValue
-    );
-
     // =========================================================
-    // UI → CREATE SESSION (VEHICLE-FIRST)
+    // UI → CREATE SESSION
     // =========================================================
-    [Authorize]
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateSessionReq req)
     {
         var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
         if (userIdStr == null)
             return Unauthorized();
 
@@ -66,7 +44,7 @@ public class SessionsController : ControllerBase
             return BadRequest("Invalid vehicle");
 
         if (string.IsNullOrWhiteSpace(vehicle.DeviceId))
-            return BadRequest("No device assigned to this vehicle");
+            return BadRequest("Vehicle has no device");
 
         string action = req.ActionType?.Trim().ToUpper() ?? "";
 
@@ -100,306 +78,33 @@ public class SessionsController : ControllerBase
         _db.EcuReadSessions.Add(session);
         await _db.SaveChangesAsync();
 
+        // ======================================================
+        // Publish command to ESP32 via MQTT
+        // ======================================================
+
+        await _mqtt.PublishCommand(
+            session.DeviceId,
+            new
+            {
+                sessionId = session.SessionId,
+                actionType = session.ActionType,
+                protocol = session.Protocol,
+                brand = vehicle.VehicleModel?.Brand,
+                model = vehicle.VehicleModel?.Model,
+                year = vehicle.VehicleModel?.Year
+            });
+
+        session.Status = SessionStatus.Processing;
+
+        await _db.SaveChangesAsync();
+
         return Ok(new { SessionId = session.SessionId });
     }
 
-    public record Esp32PendingReq(
-        string DeviceId,
-        string Firmware
-    );
-    private async Task<bool> ValidateDeviceKeyAsync(string deviceId)
-    {
-        if (!Request.Headers.TryGetValue("DeviceKey", out var deviceKey))
-            return false;
-
-        var device = await _db.Devices
-            .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
-
-        if (device == null)
-            return false;
-
-        return device.DeviceKey == deviceKey;
-    }
-
-    // =========================================================
-    // ESP32 → SUBMIT DTCs
-    // =========================================================
-    [AllowAnonymous]
-    [HttpPost("{sessionId:int}/dtcs")]
-    public async Task<IActionResult> SubmitDtcsFromEsp32(
-        int sessionId,
-        [FromBody] Esp32SubmitDtcsReq req)
-    {
-        if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
-            return BadRequest("Invalid payload");
-
-        if (req.Protocol != "OBDII" && req.Protocol != "KWP")
-            return BadRequest("Invalid protocol");
-
-        var session = await _db.EcuReadSessions
-            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
-
-        if (session == null)
-            return NotFound("Session not found");
-
-        if (!await ValidateDeviceKeyAsync(session.DeviceId))
-            return Unauthorized("Invalid device key");
-
-        if (session.Status != SessionStatus.Processing)
-            return BadRequest("Invalid session state");
-
-        if (!string.Equals(session.Protocol, req.Protocol, StringComparison.OrdinalIgnoreCase))
-            return BadRequest("Protocol mismatch");
-
-        int vehicleId = session.VehicleId;
-        var now = DateTime.UtcNow;
-
-        var incomingDtcs = req.Dtcs ?? new List<Esp32DtcItem>();
-
-        var incomingCodes = incomingDtcs
-            .Where(x => !string.IsNullOrWhiteSpace(x.DtcCode))
-            .Select(x => x.DtcCode.Trim())
-            .ToHashSet();
-
-        var currentDbDtcs = await _db.EcuDtcCurrent
-            .Where(x => x.VehicleId == vehicleId)
-            .ToListAsync();
-
-        var openHistory = await _db.EcuDtcHistory
-            .Where(x => x.VehicleId == vehicleId && x.ClearedAt == null)
-            .ToListAsync();
-
-        // ================= REMOVE LỖI ĐÃ BIẾN MẤT =================
-        foreach (var cur in currentDbDtcs)
-        {
-            if (!incomingCodes.Contains(cur.DtcCode))
-            {
-                _db.EcuDtcCurrent.Remove(cur);
-
-                var history = openHistory
-                    .FirstOrDefault(x => x.DtcCode == cur.DtcCode);
-
-                if (history != null)
-                    history.ClearedAt = now;
-            }
-        }
-
-        // ================= INSERT / UPDATE =================
-        foreach (var d in incomingDtcs)
-        {
-            if (string.IsNullOrWhiteSpace(d.DtcCode))
-                continue;
-
-            var code = d.DtcCode.Trim();
-
-            // Lưu Result (session history cho Tech)
-            _db.EcuDtcResults.Add(new EcuDtcResult
-            {
-                SessionId = sessionId,
-                DtcCode = code,
-                StatusByte = d.StatusByte,
-                Protocol = req.Protocol
-            });
-
-            var existingCurrent = currentDbDtcs
-                .FirstOrDefault(x => x.DtcCode == code);
-
-            if (existingCurrent == null)
-            {
-                // Thêm vào Current
-                _db.EcuDtcCurrent.Add(new EcuDtcCurrent
-                {
-                    VehicleId = vehicleId,
-                    DtcCode = code,
-                    StatusByte = d.StatusByte,
-                    LastSeenAt = now
-                });
-
-                // Thêm vào History
-                _db.EcuDtcHistory.Add(new EcuDtcHistory
-                {
-                    VehicleId = vehicleId,
-                    DtcCode = code,
-                    StatusByte = d.StatusByte,
-                    FirstSeenAt = now,
-                    LastSeenAt = now
-                });
-            }
-            else
-            {
-                existingCurrent.StatusByte = d.StatusByte;
-                existingCurrent.LastSeenAt = now;
-
-                var history = openHistory
-                    .FirstOrDefault(x => x.DtcCode == code);
-
-                if (history != null)
-                    history.LastSeenAt = now;
-            }
-        }
-
-        await _db.SaveChangesAsync();
-
-        return Ok(new { ok = true });
-    }
-
-
-    // =========================================================
-    // ESP32 → GET PENDING SESSION
-    // =========================================================
-    [AllowAnonymous]
-    [HttpPost("pending")]
-    public async Task<IActionResult> GetPending([FromBody] Esp32PendingReq req)
-    {
-        if (req == null || string.IsNullOrWhiteSpace(req.DeviceId))
-            return BadRequest("Invalid payload");
-
-        var device = await _db.Devices
-            .FirstOrDefaultAsync(x => x.DeviceId == req.DeviceId && x.IsActive);
-
-        if (device == null)
-            return Unauthorized("Unknown device");
-
-        if (!await ValidateDeviceKeyAsync(req.DeviceId))
-            return Unauthorized("Invalid device key");
-
-        device.LastSeenAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
-
-        var timeout = DateTime.UtcNow.AddMinutes(-5);
-
-        var expired = await _db.EcuReadSessions
-            .Where(x => x.DeviceId == req.DeviceId &&
-                        x.Status == SessionStatus.Processing &&
-                        x.CreatedAt < timeout)
-            .ToListAsync();
-
-        foreach (var s in expired)
-        {
-            s.Status = SessionStatus.Failed;
-            s.CompletedAt = DateTime.UtcNow;
-        }
-
-        if (expired.Count > 0)
-            await _db.SaveChangesAsync();
-
-        var session = await _db.EcuReadSessions
-            .Where(x => x.DeviceId == req.DeviceId &&
-                        x.Status == SessionStatus.Pending)
-            .OrderBy(x => x.CreatedAt)
-            .FirstOrDefaultAsync();
-
-        if (session == null)
-            return NoContent();
-
-        session.Status = SessionStatus.Processing;
-        await _db.SaveChangesAsync();
-
-        var vehicle = await _db.Vehicles
-            .Include(v => v.VehicleModel)
-            .FirstOrDefaultAsync(v => v.VehicleId == session.VehicleId);
-
-        if (vehicle == null || vehicle.VehicleModel == null)
-        {
-            session.Status = SessionStatus.Failed;
-            session.CompletedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync();
-            return BadRequest("Vehicle not found");
-        }
-
-        return Ok(new
-        {
-            sessionId = session.SessionId,
-            actionType = session.ActionType,
-            protocol = session.Protocol,
-            brand = vehicle.VehicleModel.Brand,
-            model = vehicle.VehicleModel.Model,
-            year = vehicle.VehicleModel.Year
-        });
-    }
-
-
-    // =========================================================
-    // ESP32 → SUBMIT ECU INFO (OBD)
-    // =========================================================
-    [AllowAnonymous]
-    [HttpPost("{sessionId:int}/info")]
-    public async Task<IActionResult> SubmitInfoFromEsp32(
-        int sessionId,
-        [FromBody] Esp32SubmitInfoReq req)
-    {
-        if (req == null || string.IsNullOrWhiteSpace(req.Protocol))
-            return BadRequest("Invalid payload");
-
-        var session = await _db.EcuReadSessions
-            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
-
-        if (session == null)
-            return NotFound("Session not found");
-
-        if (!await ValidateDeviceKeyAsync(session.DeviceId))
-            return Unauthorized("Invalid device key");
-
-        if (session.Status != SessionStatus.Processing)
-            return BadRequest("Invalid session state");
-
-        if (!string.Equals(session.Protocol, req.Protocol, StringComparison.OrdinalIgnoreCase))
-            return BadRequest("Protocol mismatch");
-
-        _db.EcuInfoResults.RemoveRange(
-            _db.EcuInfoResults.Where(x => x.SessionId == sessionId)
-        );
-
-        void Add(string key, string? val)
-        {
-            if (string.IsNullOrWhiteSpace(val)) return;
-
-            _db.EcuInfoResults.Add(new EcuInfoResult
-            {
-                SessionId = sessionId,
-                InfoKey = key,
-                InfoLabel = key,
-                InfoValue = val
-            });
-        }
-
-        Add("VIN", req.Vin);
-        Add("CALID", req.CalId);
-        Add("CVN", req.Cvn);
-        Add("HW", req.Hardware);
-
-        await _db.SaveChangesAsync();
-        return Ok(new { ok = true });
-    }
-
-    // =========================================================
-    // ESP32 → COMPLETE SESSION
-    // =========================================================
-    [AllowAnonymous]
-    [HttpPost("{sessionId:int}/complete")]
-    public async Task<IActionResult> CompleteSession(int sessionId)
-    {
-        var session = await _db.EcuReadSessions
-            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
-
-        if (session == null)
-            return NotFound("Session not found");
-
-        if (!await ValidateDeviceKeyAsync(session.DeviceId))
-            return Unauthorized("Invalid device key");
-
-        if (session.Status != SessionStatus.Processing)
-            return BadRequest("Invalid session state");
-
-        session.Status = SessionStatus.Completed;
-        session.CompletedAt = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync();
-        return Ok(new { ok = true });
-    }
     // =========================================================
     // UI → GET SESSION DTCs
     // =========================================================
+
     [HttpGet("{sessionId:int}/dtcs")]
     public async Task<IActionResult> GetSessionDtcs(int sessionId)
     {
@@ -430,9 +135,11 @@ public class SessionsController : ControllerBase
 
         return Ok(dtcs);
     }
+
     // =========================================================
     // UI → GET SESSION INFO
     // =========================================================
+
     [HttpGet("{sessionId:int}/info")]
     public async Task<IActionResult> GetSessionInfo(int sessionId)
     {
@@ -457,15 +164,18 @@ public class SessionsController : ControllerBase
 
         return Ok(info);
     }
+
+    // =========================================================
+    // UI → SESSION STATUS
+    // =========================================================
+
     public record SessionStatusDto(
         int SessionId,
         string Status,
         DateTime CreatedAt,
         DateTime? CompletedAt
     );
-    // =========================================================
-    // UI → GET SESSION STATUS
-    // =========================================================
+
     [HttpGet("{sessionId:int}/status")]
     public async Task<IActionResult> GetSessionStatus(int sessionId)
     {
@@ -484,5 +194,4 @@ public class SessionsController : ControllerBase
 
         return Ok(session);
     }
-
 }

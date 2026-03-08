@@ -27,20 +27,27 @@ namespace VehicleDiag.Api.Services
             _client.ApplicationMessageReceivedAsync += HandleMessage;
 
             var options = new MqttClientOptionsBuilder()
-                .WithTcpServer(
-                    "dc3f111e040f4e8d9b48df7616b1b80e.s1.eu.hivemq.cloud",
-                    8883)
-                .WithCredentials("ds_backend", "YOUR_PASSWORD")
-                .WithTls()
+                .WithTcpServer("dc3f111e040f4e8d9b48df7616b1b80e.s1.eu.hivemq.cloud", 8883)
+                .WithCredentials("ds_backend", "DSbackend32265")
+                .WithTlsOptions(o =>
+                {
+                    o.UseTls();
+                })
                 .Build();
 
             await _client.ConnectAsync(options, stoppingToken);
 
             Console.WriteLine("MQTT connected");
 
+            // AUTO MODE
             await _client.SubscribeAsync("vehicle/+/telemetry");
 
-            Console.WriteLine("Subscribed vehicle telemetry");
+            // SESSION MODE
+            await _client.SubscribeAsync("vehicle/+/session/+/dtc");
+            await _client.SubscribeAsync("vehicle/+/session/+/info");
+            await _client.SubscribeAsync("vehicle/+/session/+/done");
+
+            Console.WriteLine("Subscribed MQTT topics");
 
             await Task.Delay(Timeout.Infinite, stoppingToken);
         }
@@ -53,16 +60,9 @@ namespace VehicleDiag.Api.Services
                     return;
 
                 var topic = e.ApplicationMessage.Topic;
-
-                var payload = Encoding.UTF8.GetString(
-                    e.ApplicationMessage.PayloadSegment);
+                var payload = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
 
                 Console.WriteLine($"MQTT {topic} -> {payload}");
-
-                var data = JsonSerializer.Deserialize<TelemetryPayload>(payload);
-
-                if (data == null)
-                    return;
 
                 var parts = topic.Split('/');
 
@@ -73,113 +73,24 @@ namespace VehicleDiag.Api.Services
 
                 using var scope = _scopeFactory.CreateScope();
 
-                var db = scope.ServiceProvider
-                    .GetRequiredService<AppDbContext>();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-                var device = await db.Devices
-                    .FirstOrDefaultAsync(x =>
-                        x.DeviceId == deviceId &&
-                        x.IsActive);
-
-                if (device == null)
-                    return;
-
-                var vehicle = await db.Vehicles
-                    .FirstOrDefaultAsync(v =>
-                        v.DeviceId == deviceId);
-
-                if (vehicle == null)
-                    return;
-
-                var now = DateTime.UtcNow;
-
-                // ================= TELEMETRY =================
-
-                db.Telemetry.Add(new Telemetry
+                if (topic.Contains("/telemetry"))
                 {
-                    DeviceId = deviceId,
-                    Lat = data.Lat,
-                    Lng = data.Lng,
-                    CreatedAt = now
-                });
-
-                device.LastSeenAt = now;
-
-                // ================= DTC SNAPSHOT =================
-
-                var incomingDtcs = data.Dtcs ?? new List<DtcPayload>();
-
-                var currentDbDtcs = await db.EcuDtcCurrent
-                    .Where(x => x.VehicleId == vehicle.VehicleId)
-                    .ToListAsync();
-
-                var openHistories = await db.EcuDtcHistory
-                    .Where(h =>
-                        h.VehicleId == vehicle.VehicleId &&
-                        h.ClearedAt == null)
-                    .ToListAsync();
-
-                var currentDict = currentDbDtcs
-                    .ToDictionary(x => x.DtcCode);
-
-                var historyDict = openHistories
-                    .ToDictionary(x => x.DtcCode);
-
-                var incomingCodes = incomingDtcs
-                    .Select(x => x.DtcCode)
-                    .ToHashSet();
-
-                // ===== NEW / UPDATE =====
-
-                foreach (var dtc in incomingDtcs)
-                {
-                    if (!currentDict.TryGetValue(dtc.DtcCode, out var existing))
-                    {
-                        db.EcuDtcCurrent.Add(new EcuDtcCurrent
-                        {
-                            VehicleId = vehicle.VehicleId,
-                            DtcCode = dtc.DtcCode,
-                            StatusByte = dtc.StatusByte,
-                            LastSeenAt = now
-                        });
-
-                        db.EcuDtcHistory.Add(new EcuDtcHistory
-                        {
-                            VehicleId = vehicle.VehicleId,
-                            DtcCode = dtc.DtcCode,
-                            StatusByte = dtc.StatusByte,
-                            FirstSeenAt = now,
-                            LastSeenAt = now
-                        });
-                    }
-                    else
-                    {
-                        existing.StatusByte = dtc.StatusByte;
-                        existing.LastSeenAt = now;
-
-                        if (historyDict.TryGetValue(dtc.DtcCode, out var history))
-                        {
-                            history.LastSeenAt = now;
-                        }
-                    }
+                    await HandleTelemetry(deviceId, payload, db);
                 }
-
-                // ===== CLEARED DTC =====
-
-                foreach (var dbDtc in currentDbDtcs)
+                else if (topic.EndsWith("/dtc"))
                 {
-                    if (!incomingCodes.Contains(dbDtc.DtcCode))
-                    {
-                        if (historyDict.TryGetValue(dbDtc.DtcCode, out var history))
-                        {
-                            history.ClearedAt = now;
-                        }
-
-                        db.EcuDtcCurrent.Remove(dbDtc);
-                    }
+                    await HandleSessionDtc(topic, payload, db);
                 }
-
-                await db.SaveChangesAsync();
+                else if (topic.EndsWith("/info"))
+                {
+                    await HandleSessionInfo(topic, payload, db);
+                }
+                else if (topic.EndsWith("/done"))
+                {
+                    await HandleSessionComplete(topic, db);
+                }
             }
             catch (Exception ex)
             {
@@ -187,20 +98,227 @@ namespace VehicleDiag.Api.Services
             }
         }
 
+        // =========================================================
+        // AUTO MODE
+        // =========================================================
+
+        private async Task HandleTelemetry(string deviceId, string payload, AppDbContext db)
+        {
+            var data = JsonSerializer.Deserialize<TelemetryPayload>(payload);
+
+            if (data == null)
+                return;
+
+            var device = await db.Devices
+                .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
+
+            if (device == null)
+                return;
+
+            var vehicle = await db.Vehicles
+                .FirstOrDefaultAsync(v => v.DeviceId == deviceId);
+
+            if (vehicle == null)
+                return;
+
+            var now = DateTime.UtcNow;
+
+            db.Telemetry.Add(new Telemetry
+            {
+                DeviceId = deviceId,
+                Lat = data.Lat,
+                Lng = data.Lng,
+                CreatedAt = now
+            });
+
+            device.LastSeenAt = now;
+
+            var incomingDtcs = data.Dtcs ?? new List<DtcPayload>();
+
+            var currentDbDtcs = await db.EcuDtcCurrent
+                .Where(x => x.VehicleId == vehicle.VehicleId)
+                .ToListAsync();
+
+            var openHistories = await db.EcuDtcHistory
+                .Where(h => h.VehicleId == vehicle.VehicleId && h.ClearedAt == null)
+                .ToListAsync();
+
+            var currentDict = currentDbDtcs.ToDictionary(x => x.DtcCode);
+            var historyDict = openHistories.ToDictionary(x => x.DtcCode);
+
+            var incomingCodes = incomingDtcs.Select(x => x.DtcCode).ToHashSet();
+
+            foreach (var dtc in incomingDtcs)
+            {
+                if (!currentDict.TryGetValue(dtc.DtcCode, out var existing))
+                {
+                    db.EcuDtcCurrent.Add(new EcuDtcCurrent
+                    {
+                        VehicleId = vehicle.VehicleId,
+                        DtcCode = dtc.DtcCode,
+                        StatusByte = dtc.StatusByte,
+                        LastSeenAt = now
+                    });
+
+                    db.EcuDtcHistory.Add(new EcuDtcHistory
+                    {
+                        VehicleId = vehicle.VehicleId,
+                        DtcCode = dtc.DtcCode,
+                        StatusByte = dtc.StatusByte,
+                        FirstSeenAt = now,
+                        LastSeenAt = now
+                    });
+                }
+                else
+                {
+                    existing.StatusByte = dtc.StatusByte;
+                    existing.LastSeenAt = now;
+
+                    if (historyDict.TryGetValue(dtc.DtcCode, out var history))
+                        history.LastSeenAt = now;
+                }
+            }
+
+            foreach (var dbDtc in currentDbDtcs)
+            {
+                if (!incomingCodes.Contains(dbDtc.DtcCode))
+                {
+                    if (historyDict.TryGetValue(dbDtc.DtcCode, out var history))
+                        history.ClearedAt = now;
+
+                    db.EcuDtcCurrent.Remove(dbDtc);
+                }
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        // =========================================================
+        // SESSION RESULT
+        // =========================================================
+
+        private async Task HandleSessionDtc(string topic, string payload, AppDbContext db)
+        {
+            var parts = topic.Split('/');
+
+            if (parts.Length < 5)
+                return;
+
+            int sessionId = int.Parse(parts[3]);
+
+            var data = JsonSerializer.Deserialize<SessionResultPayload>(payload);
+
+            if (data?.Dtcs == null)
+                return;
+
+            foreach (var d in data.Dtcs)
+            {
+                db.EcuDtcResults.Add(new EcuDtcResult
+                {
+                    SessionId = sessionId,
+                    DtcCode = d.DtcCode,
+                    StatusByte = (byte)d.StatusByte,
+                    Protocol = data.Protocol ?? "OBDII"
+                });
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        // =========================================================
+        // SESSION INFO
+        // =========================================================
+
+        private async Task HandleSessionInfo(string topic, string payload, AppDbContext db)
+        {
+            var parts = topic.Split('/');
+
+            if (parts.Length < 5)
+                return;
+
+            int sessionId = int.Parse(parts[3]);
+
+            var data = JsonSerializer.Deserialize<SessionInfoPayload>(payload);
+
+            if (data == null)
+                return;
+
+            void Add(string key, string? val)
+            {
+                if (string.IsNullOrWhiteSpace(val))
+                    return;
+
+                db.EcuInfoResults.Add(new EcuInfoResult
+                {
+                    SessionId = sessionId,
+                    InfoKey = key,
+                    InfoLabel = key,
+                    InfoValue = val
+                });
+            }
+
+            Add("VIN", data.Vin);
+            Add("CALID", data.CalId);
+            Add("CVN", data.Cvn);
+            Add("HW", data.Hardware);
+
+            await db.SaveChangesAsync();
+        }
+
+        // =========================================================
+        // SESSION COMPLETE
+        // =========================================================
+
+        private async Task HandleSessionComplete(string topic, AppDbContext db)
+        {
+            var parts = topic.Split('/');
+
+            if (parts.Length < 5)
+                return;
+
+            int sessionId = int.Parse(parts[3]);
+
+            var session = await db.EcuReadSessions
+                .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+
+            if (session == null)
+                return;
+
+            session.Status = "Completed";
+            session.CompletedAt = DateTime.UtcNow;
+
+            await db.SaveChangesAsync();
+        }
+
+        // =========================================================
+        // PAYLOAD MODELS
+        // =========================================================
+
         public class TelemetryPayload
         {
             public double Lat { get; set; }
-
             public double Lng { get; set; }
-
             public List<DtcPayload>? Dtcs { get; set; }
         }
 
         public class DtcPayload
         {
             public string DtcCode { get; set; } = "";
-
             public int StatusByte { get; set; }
+        }
+
+        public class SessionResultPayload
+        {
+            public string? Protocol { get; set; }
+            public List<DtcPayload>? Dtcs { get; set; }
+        }
+
+        public class SessionInfoPayload
+        {
+            public string? Vin { get; set; }
+            public string? CalId { get; set; }
+            public string? Cvn { get; set; }
+            public string? Hardware { get; set; }
         }
     }
 }

@@ -234,14 +234,23 @@ namespace VehicleDiag.Api.Services
             if (parts.Length < 5)
                 return;
 
-            int sessionId = int.Parse(parts[3]);
+            if (!int.TryParse(parts[3], out int sessionId))
+                return;
 
             Console.WriteLine($"[Session] DTC result session={sessionId}");
 
-            var data = JsonSerializer.Deserialize<SessionResultPayload>(payload);
+            var data = JsonSerializer.Deserialize<SessionResultPayload>(
+                payload,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
 
-            if (data?.Dtcs == null)
+            if (data?.Dtcs == null || data.Dtcs.Count == 0)
+            {
+                Console.WriteLine("[Session] No DTC returned");
                 return;
+            }
 
             foreach (var d in data.Dtcs)
             {
@@ -270,19 +279,39 @@ namespace VehicleDiag.Api.Services
             if (parts.Length < 5)
                 return;
 
-            int sessionId = int.Parse(parts[3]);
+            if (!int.TryParse(parts[3], out int sessionId))
+                return;
 
             Console.WriteLine($"[Session] INFO session={sessionId}");
 
-            var data = JsonSerializer.Deserialize<SessionInfoPayload>(payload);
+            var data = JsonSerializer.Deserialize<SessionInfoPayload>(
+                payload,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
 
             if (data == null)
+            {
+                Console.WriteLine("[Session] INFO payload parse failed");
                 return;
+            }
+
+            var session = await db.EcuReadSessions
+                .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+
+            if (session == null)
+            {
+                Console.WriteLine($"[Session] session {sessionId} not found");
+                return;
+            }
 
             void Add(string key, string? val)
             {
                 if (string.IsNullOrWhiteSpace(val))
                     return;
+
+                Console.WriteLine($"   -> {key} = {val}");
 
                 db.EcuInfoResults.Add(new EcuInfoResult
                 {
@@ -299,6 +328,8 @@ namespace VehicleDiag.Api.Services
             Add("HW", data.Hardware);
 
             await db.SaveChangesAsync();
+
+            Console.WriteLine("[Session] INFO stored");
         }
 
         // =========================================================
@@ -312,7 +343,8 @@ namespace VehicleDiag.Api.Services
             if (parts.Length < 5)
                 return;
 
-            int sessionId = int.Parse(parts[3]);
+            if (!int.TryParse(parts[3], out int sessionId))
+                return;
 
             Console.WriteLine($"[Session] COMPLETE session={sessionId}");
 
@@ -320,7 +352,10 @@ namespace VehicleDiag.Api.Services
                 .FirstOrDefaultAsync(x => x.SessionId == sessionId);
 
             if (session == null)
+            {
+                Console.WriteLine($"[Session] session {sessionId} not found");
                 return;
+            }
 
             session.Status = "Completed";
             session.CompletedAt = DateTime.UtcNow;

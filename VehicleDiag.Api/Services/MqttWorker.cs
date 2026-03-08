@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using VehicleDiag.Api.Data;
 using VehicleDiag.Api.Models;
+using VehicleDiag.Api.Constants;
 
 namespace VehicleDiag.Api.Services
 {
@@ -39,6 +40,7 @@ namespace VehicleDiag.Api.Services
             Console.WriteLine("MQTT connected");
 
             await _client.SubscribeAsync("vehicle/+/telemetry");
+            await _client.SubscribeAsync("vehicle/+/status");
             await _client.SubscribeAsync("vehicle/+/session/+/dtc");
             await _client.SubscribeAsync("vehicle/+/session/+/info");
             await _client.SubscribeAsync("vehicle/+/session/+/done");
@@ -72,6 +74,9 @@ namespace VehicleDiag.Api.Services
 
                 if (topic.Contains("/telemetry"))
                     await HandleTelemetry(deviceId, payload, db);
+
+                else if (topic.EndsWith("/status"))
+                    await HandleHeartbeat(deviceId, db);
 
                 else if (topic.EndsWith("/dtc"))
                     await HandleSessionDtc(topic, payload, db);
@@ -222,7 +227,23 @@ namespace VehicleDiag.Api.Services
 
             Console.WriteLine("[Telemetry] DB updated");
         }
+        private async Task HandleHeartbeat(string deviceId, AppDbContext db)
+        {
+            Console.WriteLine($"[Heartbeat] Device={deviceId}");
 
+            var device = await db.Devices
+                .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
+
+            if (device == null)
+            {
+                Console.WriteLine($"[Heartbeat] Device {deviceId} not found");
+                return;
+            }
+
+            device.LastSeenAt = DateTime.UtcNow;
+
+            await db.SaveChangesAsync();
+        }
         // =========================================================
         // SESSION RESULT
         // =========================================================
@@ -357,10 +378,12 @@ namespace VehicleDiag.Api.Services
                 return;
             }
 
-            session.Status = "Completed";
+            session.Status = SessionStatus.Completed;
             session.CompletedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
+
+            Console.WriteLine("[Session] status updated → COMPLETED");
         }
 
         // =========================================================

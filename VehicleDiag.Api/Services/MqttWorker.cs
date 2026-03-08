@@ -1,8 +1,8 @@
-﻿using MQTTnet;
+﻿using Microsoft.EntityFrameworkCore;
+using MQTTnet;
 using MQTTnet.Client;
 using System.Text;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using VehicleDiag.Api.Data;
 using VehicleDiag.Api.Models;
 
@@ -21,7 +21,6 @@ namespace VehicleDiag.Api.Services
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             var factory = new MqttFactory();
-
             _client = factory.CreateMqttClient();
 
             _client.ApplicationMessageReceivedAsync += HandleMessage;
@@ -39,10 +38,7 @@ namespace VehicleDiag.Api.Services
 
             Console.WriteLine("MQTT connected");
 
-            // AUTO MODE
             await _client.SubscribeAsync("vehicle/+/telemetry");
-
-            // SESSION MODE
             await _client.SubscribeAsync("vehicle/+/session/+/dtc");
             await _client.SubscribeAsync("vehicle/+/session/+/info");
             await _client.SubscribeAsync("vehicle/+/session/+/done");
@@ -72,29 +68,24 @@ namespace VehicleDiag.Api.Services
                 var deviceId = parts[1];
 
                 using var scope = _scopeFactory.CreateScope();
-
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 if (topic.Contains("/telemetry"))
-                {
                     await HandleTelemetry(deviceId, payload, db);
-                }
+
                 else if (topic.EndsWith("/dtc"))
-                {
                     await HandleSessionDtc(topic, payload, db);
-                }
+
                 else if (topic.EndsWith("/info"))
-                {
                     await HandleSessionInfo(topic, payload, db);
-                }
+
                 else if (topic.EndsWith("/done"))
-                {
                     await HandleSessionComplete(topic, db);
-                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message);
+                Console.WriteLine("MQTT ERROR:");
+                Console.WriteLine(ex.ToString());
             }
         }
 
@@ -104,27 +95,44 @@ namespace VehicleDiag.Api.Services
 
         private async Task HandleTelemetry(string deviceId, string payload, AppDbContext db)
         {
+            Console.WriteLine($"[Telemetry] Device={deviceId}");
+
             var data = JsonSerializer.Deserialize<TelemetryPayload>(
                 payload,
                 new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
-            });
+                });
 
             if (data == null)
+            {
+                Console.WriteLine("[Telemetry] JSON parse failed");
                 return;
+            }
+
+            Console.WriteLine($"[Telemetry] Lat={data.Lat} Lng={data.Lng} DTC count={data.Dtcs?.Count}");
 
             var device = await db.Devices
                 .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
 
             if (device == null)
+            {
+                Console.WriteLine($"[Telemetry] Device {deviceId} not found");
                 return;
+            }
+
+            Console.WriteLine($"[Telemetry] Device OK");
 
             var vehicle = await db.Vehicles
                 .FirstOrDefaultAsync(v => v.DeviceId == deviceId);
 
             if (vehicle == null)
+            {
+                Console.WriteLine($"[Telemetry] Vehicle mapping missing");
                 return;
+            }
+
+            Console.WriteLine($"[Telemetry] VehicleId={vehicle.VehicleId}");
 
             var now = DateTime.UtcNow;
 
@@ -140,9 +148,16 @@ namespace VehicleDiag.Api.Services
 
             var incomingDtcs = data.Dtcs ?? new List<DtcPayload>();
 
+            Console.WriteLine($"[Telemetry] Incoming DTC count={incomingDtcs.Count}");
+
+            foreach (var d in incomingDtcs)
+                Console.WriteLine($"   -> {d.DtcCode} status={d.StatusByte}");
+
             var currentDbDtcs = await db.EcuDtcCurrent
                 .Where(x => x.VehicleId == vehicle.VehicleId)
                 .ToListAsync();
+
+            Console.WriteLine($"[Telemetry] Current DB DTC count={currentDbDtcs.Count}");
 
             var openHistories = await db.EcuDtcHistory
                 .Where(h => h.VehicleId == vehicle.VehicleId && h.ClearedAt == null)
@@ -157,6 +172,8 @@ namespace VehicleDiag.Api.Services
             {
                 if (!currentDict.TryGetValue(dtc.DtcCode, out var existing))
                 {
+                    Console.WriteLine($"[Telemetry] NEW DTC {dtc.DtcCode}");
+
                     db.EcuDtcCurrent.Add(new EcuDtcCurrent
                     {
                         VehicleId = vehicle.VehicleId,
@@ -176,6 +193,8 @@ namespace VehicleDiag.Api.Services
                 }
                 else
                 {
+                    Console.WriteLine($"[Telemetry] UPDATE DTC {dtc.DtcCode}");
+
                     existing.StatusByte = dtc.StatusByte;
                     existing.LastSeenAt = now;
 
@@ -188,6 +207,8 @@ namespace VehicleDiag.Api.Services
             {
                 if (!incomingCodes.Contains(dbDtc.DtcCode))
                 {
+                    Console.WriteLine($"[Telemetry] CLEAR DTC {dbDtc.DtcCode}");
+
                     if (historyDict.TryGetValue(dbDtc.DtcCode, out var history))
                         history.ClearedAt = now;
 
@@ -195,7 +216,11 @@ namespace VehicleDiag.Api.Services
                 }
             }
 
+            Console.WriteLine("[Telemetry] Saving DB changes...");
+
             await db.SaveChangesAsync();
+
+            Console.WriteLine("[Telemetry] DB updated");
         }
 
         // =========================================================
@@ -211,6 +236,8 @@ namespace VehicleDiag.Api.Services
 
             int sessionId = int.Parse(parts[3]);
 
+            Console.WriteLine($"[Session] DTC result session={sessionId}");
+
             var data = JsonSerializer.Deserialize<SessionResultPayload>(payload);
 
             if (data?.Dtcs == null)
@@ -218,6 +245,8 @@ namespace VehicleDiag.Api.Services
 
             foreach (var d in data.Dtcs)
             {
+                Console.WriteLine($"   -> {d.DtcCode}");
+
                 db.EcuDtcResults.Add(new EcuDtcResult
                 {
                     SessionId = sessionId,
@@ -242,6 +271,8 @@ namespace VehicleDiag.Api.Services
                 return;
 
             int sessionId = int.Parse(parts[3]);
+
+            Console.WriteLine($"[Session] INFO session={sessionId}");
 
             var data = JsonSerializer.Deserialize<SessionInfoPayload>(payload);
 
@@ -282,6 +313,8 @@ namespace VehicleDiag.Api.Services
                 return;
 
             int sessionId = int.Parse(parts[3]);
+
+            Console.WriteLine($"[Session] COMPLETE session={sessionId}");
 
             var session = await db.EcuReadSessions
                 .FirstOrDefaultAsync(x => x.SessionId == sessionId);

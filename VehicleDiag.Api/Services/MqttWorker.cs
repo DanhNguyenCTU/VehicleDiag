@@ -115,7 +115,7 @@ namespace VehicleDiag.Api.Services
                 return;
             }
 
-            Console.WriteLine($"[Telemetry] Lat={data.Lat} Lng={data.Lng} DTC count={data.Dtcs?.Count}");
+            Console.WriteLine($"[Telemetry] Lat={data.Lat} Lng={data.Lng}");
 
             var device = await db.Devices
                 .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
@@ -126,8 +126,6 @@ namespace VehicleDiag.Api.Services
                 return;
             }
 
-            Console.WriteLine($"[Telemetry] Device OK");
-
             var vehicle = await db.Vehicles
                 .FirstOrDefaultAsync(v => v.DeviceId == deviceId);
 
@@ -137,9 +135,11 @@ namespace VehicleDiag.Api.Services
                 return;
             }
 
-            Console.WriteLine($"[Telemetry] VehicleId={vehicle.VehicleId}");
-
             var now = DateTime.UtcNow;
+
+            // =========================
+            // SAVE GPS TELEMETRY
+            // =========================
 
             db.Telemetry.Add(new Telemetry
             {
@@ -151,74 +151,56 @@ namespace VehicleDiag.Api.Services
 
             device.LastSeenAt = now;
 
+            // =========================
+            // DTC SNAPSHOT
+            // =========================
+
             var incomingDtcs = data.Dtcs ?? new List<DtcPayload>();
 
-            Console.WriteLine($"[Telemetry] Incoming DTC count={incomingDtcs.Count}");
+            Console.WriteLine($"[Telemetry] Snapshot DTC count={incomingDtcs.Count}");
 
             foreach (var d in incomingDtcs)
                 Console.WriteLine($"   -> {d.DtcCode} status={d.StatusByte}");
 
-            var currentDbDtcs = await db.EcuDtcCurrent
+            // =========================
+            // OVERWRITE CURRENT
+            // =========================
+
+            var oldCurrent = await db.EcuDtcCurrent
                 .Where(x => x.VehicleId == vehicle.VehicleId)
                 .ToListAsync();
 
-            Console.WriteLine($"[Telemetry] Current DB DTC count={currentDbDtcs.Count}");
-
-            var openHistories = await db.EcuDtcHistory
-                .Where(h => h.VehicleId == vehicle.VehicleId && h.ClearedAt == null)
-                .ToListAsync();
-
-            var currentDict = currentDbDtcs.ToDictionary(x => x.DtcCode);
-            var historyDict = openHistories.ToDictionary(x => x.DtcCode);
-
-            var incomingCodes = incomingDtcs.Select(x => x.DtcCode).ToHashSet();
-
-            foreach (var dtc in incomingDtcs)
+            if (oldCurrent.Count > 0)
             {
-                if (!currentDict.TryGetValue(dtc.DtcCode, out var existing))
-                {
-                    Console.WriteLine($"[Telemetry] NEW DTC {dtc.DtcCode}");
-
-                    db.EcuDtcCurrent.Add(new EcuDtcCurrent
-                    {
-                        VehicleId = vehicle.VehicleId,
-                        DtcCode = dtc.DtcCode,
-                        StatusByte = dtc.StatusByte,
-                        LastSeenAt = now
-                    });
-
-                    db.EcuDtcHistory.Add(new EcuDtcHistory
-                    {
-                        VehicleId = vehicle.VehicleId,
-                        DtcCode = dtc.DtcCode,
-                        StatusByte = dtc.StatusByte,
-                        FirstSeenAt = now,
-                        LastSeenAt = now
-                    });
-                }
-                else
-                {
-                    Console.WriteLine($"[Telemetry] UPDATE DTC {dtc.DtcCode}");
-
-                    existing.StatusByte = dtc.StatusByte;
-                    existing.LastSeenAt = now;
-
-                    if (historyDict.TryGetValue(dtc.DtcCode, out var history))
-                        history.LastSeenAt = now;
-                }
+                Console.WriteLine($"[Telemetry] Clearing {oldCurrent.Count} old current DTC");
+                db.EcuDtcCurrent.RemoveRange(oldCurrent);
             }
 
-            foreach (var dbDtc in currentDbDtcs)
+            foreach (var d in incomingDtcs)
             {
-                if (!incomingCodes.Contains(dbDtc.DtcCode))
+                db.EcuDtcCurrent.Add(new EcuDtcCurrent
                 {
-                    Console.WriteLine($"[Telemetry] CLEAR DTC {dbDtc.DtcCode}");
+                    VehicleId = vehicle.VehicleId,
+                    DtcCode = d.DtcCode,
+                    StatusByte = (byte)d.StatusByte,
+                    LastSeenAt = now
+                });
+            }
 
-                    if (historyDict.TryGetValue(dbDtc.DtcCode, out var history))
-                        history.ClearedAt = now;
+            // =========================
+            // APPEND HISTORY SNAPSHOT
+            // =========================
 
-                    db.EcuDtcCurrent.Remove(dbDtc);
-                }
+            foreach (var d in incomingDtcs)
+            {
+                db.EcuDtcHistory.Add(new EcuDtcHistory
+                {
+                    VehicleId = vehicle.VehicleId,
+                    DtcCode = d.DtcCode,
+                    StatusByte = (byte)d.StatusByte,
+                    FirstSeenAt = now,
+                    LastSeenAt = now
+                });
             }
 
             Console.WriteLine("[Telemetry] Saving DB changes...");

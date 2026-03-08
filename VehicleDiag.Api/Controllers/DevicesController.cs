@@ -111,7 +111,7 @@ public class DevicesController : ControllerBase
     [HttpGet("vehicle/{vehicleId:int}/status")]
     public async Task<IActionResult> GetVehicleDeviceStatus(int vehicleId)
     {
-        var threshold = DateTime.UtcNow.AddSeconds(-120);
+        var threshold = DateTime.UtcNow.AddSeconds(-60);
 
         var result = await (
             from v in _db.Vehicles.AsNoTracking()

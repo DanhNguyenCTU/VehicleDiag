@@ -43,6 +43,7 @@ namespace VehicleDiag.Api.Services
             await _client.SubscribeAsync("vehicle/+/status");
             await _client.SubscribeAsync("vehicle/+/session/+/dtc");
             await _client.SubscribeAsync("vehicle/+/session/+/info");
+            await _client.SubscribeAsync("vehicle/+/session/+/freeze");
             await _client.SubscribeAsync("vehicle/+/session/+/done");
 
             Console.WriteLine("Subscribed MQTT topics");
@@ -83,6 +84,9 @@ namespace VehicleDiag.Api.Services
 
                 else if (topic.EndsWith("/info"))
                     await HandleSessionInfo(topic, payload, db);
+
+                else if (topic.EndsWith("/freeze"))
+                    await HandleSessionFreezeFrame(topic, payload, db);
 
                 else if (topic.EndsWith("/done"))
                     await HandleSessionComplete(topic, db);
@@ -208,6 +212,39 @@ namespace VehicleDiag.Api.Services
             await db.SaveChangesAsync();
 
             Console.WriteLine("[Telemetry] DB updated");
+        }
+        private async Task HandleSessionFreezeFrame(string topic, string payload, AppDbContext db)
+        {
+            var parts = topic.Split('/');
+
+            if (parts.Length < 5)
+                return;
+
+            if (!int.TryParse(parts[3], out int sessionId))
+                return;
+
+            Console.WriteLine($"[Session] FREEZE FRAME session={sessionId}");
+
+            var data = JsonSerializer.Deserialize<FreezeFramePayload>(
+                payload,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+            if (data == null)
+                return;
+
+            db.FreezeFrames.Add(new FreezeFrame
+            {
+                SessionId = sessionId,
+                Dtc = data.Dtc,
+                Rpm = data.Rpm,
+                Speed = data.Speed,
+                Coolant = data.Coolant
+            });
+
+            await db.SaveChangesAsync();
         }
         private async Task HandleHeartbeat(string deviceId, AppDbContext db)
         {
@@ -397,6 +434,13 @@ namespace VehicleDiag.Api.Services
             public string? CalId { get; set; }
             public string? Cvn { get; set; }
             public string? Hardware { get; set; }
+        }
+        public class FreezeFramePayload
+        {
+            public string Dtc { get; set; } = "";
+            public int Rpm { get; set; }
+            public int Speed { get; set; }
+            public int Coolant { get; set; }
         }
     }
 }

@@ -62,7 +62,7 @@ public class SystemController : ControllerBase
             return NotFound("No device assigned to this user.");
 
         var online = device.LastSeenAt.HasValue &&
-                     device.LastSeenAt > DateTime.UtcNow.AddSeconds(-120);
+                     device.LastSeenAt > DateTime.UtcNow.AddSeconds(-60);
 
         return Ok(new
         {

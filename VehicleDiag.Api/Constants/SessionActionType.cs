@@ -5,6 +5,7 @@
         public const string READ_DTC = "ReadDTC";
         public const string CLEAR_DTC = "ClearDTC";
         public const string READ_INFO = "ReadInfo";
+        public const string READ_FREEZE_FRAME = "ReadFreezeFrame";
     }
 
 }

@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
     public DbSet<EcuDtcCurrent> EcuDtcCurrent => Set<EcuDtcCurrent>();
     public DbSet<DtcDictionary> DtcDictionary => Set<DtcDictionary>();
     public DbSet<UserVehicle> UserVehicles => Set<UserVehicle>();
+    public DbSet<FreezeFrame> FreezeFrames => Set<FreezeFrame>();
 
     public DbSet<DtcLog> DtcLogs { get; set; }
 
@@ -79,6 +80,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<EcuDtcCurrent>()
             .ToTable("EcuDtcCurrent")
             .HasKey(x => new { x.VehicleId, x.DtcCode });
+
+        modelBuilder.Entity<FreezeFrame>()
+            .ToTable("FreezeFrame")
+            .HasKey(x => x.Id);
 
         modelBuilder.Entity<DtcDictionary>()
             .ToTable("DtcDictionary")

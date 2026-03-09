@@ -2,11 +2,12 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using VehicleDiag.Api.Constants;
 using VehicleDiag.Api.Data;
-using VehicleDiag.Api.Services;
+using VehicleDiag.Api.Dtos;
 using VehicleDiag.Api.Dtos.Requests;
 using VehicleDiag.Api.Models;
-using VehicleDiag.Api.Constants;
+using VehicleDiag.Api.Services;
 
 namespace VehicleDiag.Api.Controllers;
 
@@ -196,5 +197,25 @@ public class SessionsController : ControllerBase
             return NotFound("Session not found");
 
         return Ok(session);
+    }
+
+    [HttpGet("{sessionId:int}/freeze-frame")]
+    public async Task<IActionResult> GetFreezeFrame(int sessionId)
+    {
+        var data = await _db.FreezeFrames
+            .Where(x => x.SessionId == sessionId)
+            .Select(x => new FreezeFrameDto
+            {
+                Dtc = x.Dtc,
+                Rpm = x.Rpm,
+                Speed = x.Speed,
+                Coolant = x.Coolant
+            })
+            .FirstOrDefaultAsync();
+
+        if (data == null)
+            return NotFound();
+
+        return Ok(data);
     }
 }

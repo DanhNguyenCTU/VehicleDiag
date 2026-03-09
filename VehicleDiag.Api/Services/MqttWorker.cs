@@ -156,55 +156,60 @@ namespace VehicleDiag.Api.Services
             device.LastSeenAt = now;
 
             // =========================
-            // DTC SNAPSHOT
+            // PROCESS DTC SNAPSHOT
             // =========================
 
-            var incomingDtcs = data.Dtcs ?? new List<DtcPayload>();
-
-            Console.WriteLine($"[Telemetry] Snapshot DTC count={incomingDtcs.Count}");
-
-            foreach (var d in incomingDtcs)
-                Console.WriteLine($"   -> {d.DtcCode} status={d.StatusByte}");
-
-            // =========================
-            // OVERWRITE CURRENT
-            // =========================
-
-            var oldCurrent = await db.EcuDtcCurrent
-                .Where(x => x.VehicleId == vehicle.VehicleId)
-                .ToListAsync();
-
-            if (oldCurrent.Count > 0)
+            if (data.Dtcs != null)
             {
-                Console.WriteLine($"[Telemetry] Clearing {oldCurrent.Count} old current DTC");
-                db.EcuDtcCurrent.RemoveRange(oldCurrent);
-            }
+                var incomingDtcs = data.Dtcs;
 
-            foreach (var d in incomingDtcs)
-            {
-                db.EcuDtcCurrent.Add(new EcuDtcCurrent
+                Console.WriteLine($"[Telemetry] Snapshot DTC count={incomingDtcs.Count}");
+
+                foreach (var d in incomingDtcs)
+                    Console.WriteLine($"   -> {d.DtcCode} status={d.StatusByte}");
+
+                // ===== LOAD CURRENT DTC =====
+
+                var oldCurrent = await db.EcuDtcCurrent
+                    .Where(x => x.VehicleId == vehicle.VehicleId)
+                    .ToListAsync();
+
+                if (oldCurrent.Count > 0)
                 {
-                    VehicleId = vehicle.VehicleId,
-                    DtcCode = d.DtcCode,
-                    StatusByte = (byte)d.StatusByte,
-                    LastSeenAt = now
-                });
-            }
+                    Console.WriteLine($"[Telemetry] Clearing {oldCurrent.Count} old current DTC");
+                    db.EcuDtcCurrent.RemoveRange(oldCurrent);
+                }
 
-            // =========================
-            // APPEND HISTORY SNAPSHOT
-            // =========================
+                // ===== INSERT NEW CURRENT =====
 
-            foreach (var d in incomingDtcs)
-            {
-                db.EcuDtcHistory.Add(new EcuDtcHistory
+                foreach (var d in incomingDtcs)
                 {
-                    VehicleId = vehicle.VehicleId,
-                    DtcCode = d.DtcCode,
-                    StatusByte = (byte)d.StatusByte,
-                    FirstSeenAt = now,
-                    LastSeenAt = now
-                });
+                    db.EcuDtcCurrent.Add(new EcuDtcCurrent
+                    {
+                        VehicleId = vehicle.VehicleId,
+                        DtcCode = d.DtcCode,
+                        StatusByte = (byte)d.StatusByte,
+                        LastSeenAt = now
+                    });
+                }
+
+                // ===== APPEND HISTORY =====
+
+                foreach (var d in incomingDtcs)
+                {
+                    db.EcuDtcHistory.Add(new EcuDtcHistory
+                    {
+                        VehicleId = vehicle.VehicleId,
+                        DtcCode = d.DtcCode,
+                        StatusByte = (byte)d.StatusByte,
+                        FirstSeenAt = now,
+                        LastSeenAt = now
+                    });
+                }
+            }
+            else
+            {
+                Console.WriteLine("[Telemetry] No DTC field → skip DTC update");
             }
 
             Console.WriteLine("[Telemetry] Saving DB changes...");

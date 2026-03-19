@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using VehicleDiag.Api.Data;
+using VehicleDiag.Api.Dtos;
 
 namespace VehicleDiag.Api.Controllers;
 
@@ -24,25 +25,65 @@ public class DtcsController : ControllerBase
     }
 
     [HttpPost("lookup")]
-    public async Task<IActionResult> Lookup([FromBody] List<string> codes)
+    public async Task<IActionResult> Lookup([FromBody] DtcLookupRequestDto req)
     {
-        if (codes == null || codes.Count == 0)
+        if (req == null || req.Codes == null || req.Codes.Count == 0)
             return Ok(new List<DtcLookupDto>());
 
-        var normalized = codes
+        var normalizedCodes = req.Codes
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Select(x => x.Trim().ToUpper())
             .Distinct()
             .ToList();
 
-        var result = await _db.DtcDictionary
-            .Where(x => normalized.Contains(x.DtcCode))
-            .Select(x => new DtcLookupDto
-            {
-                Code = x.DtcCode,
-                Description = x.Description
-            })
+        if (normalizedCodes.Count == 0)
+            return Ok(new List<DtcLookupDto>());
+
+        string brand = (req.Brand ?? "").Trim();
+        string? groupCode = null;
+
+        if (!string.IsNullOrWhiteSpace(brand))
+        {
+            groupCode = await _db.ManufacturerBrands
+                .Where(x => x.Brand == brand)
+                .Select(x => x.GroupCode)
+                .FirstOrDefaultAsync();
+        }
+
+        var dictRows = await _db.DtcDictionary
+            .Where(d =>
+                normalizedCodes.Contains(d.DtcCode) &&
+                (
+                    d.Scope == "Generic" ||
+                    (
+                        groupCode != null &&
+                        d.Scope == "Manufacturer" &&
+                        d.GroupCode == groupCode
+                    )
+                ))
             .ToListAsync();
+
+        var result = normalizedCodes
+            .Select(code =>
+            {
+                var bestMatch = dictRows
+                    .Where(d => d.DtcCode == code)
+                    .OrderBy(d => d.Scope == "Manufacturer" ? 0 : 1)
+                    .FirstOrDefault();
+
+                if (bestMatch == null)
+                    return null;
+
+                return new DtcLookupDto
+                {
+                    Code = code,
+                    Description = string.IsNullOrWhiteSpace(bestMatch.Description)
+                        ? "Unknown DTC"
+                        : bestMatch.Description
+                };
+            })
+            .Where(x => x != null)
+            .ToList();
 
         return Ok(result);
     }

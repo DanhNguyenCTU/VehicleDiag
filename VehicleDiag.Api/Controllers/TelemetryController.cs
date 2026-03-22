@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 using VehicleDiag.Api.Data;
 using VehicleDiag.Api.Models;
 
@@ -25,7 +26,8 @@ namespace VehicleDiag.Api.Controllers
         public record TelemetryRequest(
             double Lat,
             double Lng,
-            List<DtcDto>? Dtcs
+            List<DtcDto>? Dtcs,
+            string? MqttTime
         );
 
         // ===== Lấy Device từ DeviceKey header =====
@@ -40,6 +42,23 @@ namespace VehicleDiag.Api.Controllers
                 .FirstOrDefaultAsync(x =>
                     x.DeviceKey == deviceKey &&
                     x.IsActive);
+        }
+
+        private static DateTime? ParsePayloadTimeUtc(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            if (!DateTimeOffset.TryParse(
+                    raw,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal,
+                    out var dto))
+            {
+                return null;
+            }
+
+            return dto.UtcDateTime;
         }
 
         [HttpPost]
@@ -59,6 +78,7 @@ namespace VehicleDiag.Api.Controllers
                 return BadRequest("Device not bound to vehicle");
 
             var now = DateTime.UtcNow;
+            var sentAtUtc = ParsePayloadTimeUtc(req.MqttTime);
 
             // ================== 1. Lưu Telemetry ==================
             _db.Telemetry.Add(new Telemetry
@@ -66,6 +86,7 @@ namespace VehicleDiag.Api.Controllers
                 DeviceId = device.DeviceId,
                 Lat = req.Lat,
                 Lng = req.Lng,
+                SentAtUtc = sentAtUtc,
                 CreatedAt = now
             });
 
@@ -102,7 +123,8 @@ namespace VehicleDiag.Api.Controllers
                         VehicleId = vehicle.VehicleId,
                         DtcCode = dtc.DtcCode,
                         StatusByte = dtc.StatusByte,
-                        LastSeenAt = now
+                        LastSeenAt = now,
+                        SentAtUtc = sentAtUtc
                     });
 
                     _db.EcuDtcHistory.Add(new EcuDtcHistory
@@ -111,7 +133,8 @@ namespace VehicleDiag.Api.Controllers
                         DtcCode = dtc.DtcCode,
                         StatusByte = dtc.StatusByte,
                         FirstSeenAt = now,
-                        LastSeenAt = now
+                        LastSeenAt = now,
+                        SentAtUtc = sentAtUtc
                     });
                 }
                 else
@@ -119,10 +142,12 @@ namespace VehicleDiag.Api.Controllers
                     // 🔥 Vẫn còn lỗi
                     existing.StatusByte = dtc.StatusByte;
                     existing.LastSeenAt = now;
+                    existing.SentAtUtc = sentAtUtc;
 
                     if (historyDict.TryGetValue(dtc.DtcCode, out var history))
                     {
                         history.LastSeenAt = now;
+                        history.SentAtUtc = sentAtUtc;
                     }
                 }
             }

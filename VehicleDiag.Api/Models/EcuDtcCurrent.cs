@@ -6,5 +6,6 @@
         public string DtcCode { get; set; } = "";
         public int StatusByte { get; set; }
         public DateTime LastSeenAt { get; set; }
+        public DateTime? SentAtUtc { get; set; }
     }
 }

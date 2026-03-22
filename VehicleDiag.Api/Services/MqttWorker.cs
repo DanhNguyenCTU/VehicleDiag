@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using MQTTnet;
 using MQTTnet.Client;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using VehicleDiag.Api.Data;
@@ -77,7 +78,7 @@ namespace VehicleDiag.Api.Services
                     await HandleTelemetry(deviceId, payload, db);
 
                 else if (topic.EndsWith("/status"))
-                    await HandleHeartbeat(deviceId, db);
+                    await HandleHeartbeat(deviceId, payload, db);
 
                 else if (topic.EndsWith("/dtc"))
                     await HandleSessionDtc(topic, payload, db);
@@ -121,6 +122,8 @@ namespace VehicleDiag.Api.Services
 
             Console.WriteLine($"[Telemetry] Lat={data.Lat} Lng={data.Lng}");
 
+            var sentAtUtc = ParsePayloadTimeUtc(data.MqttTime);
+
             var device = await db.Devices
                 .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
 
@@ -150,6 +153,7 @@ namespace VehicleDiag.Api.Services
                 DeviceId = deviceId,
                 Lat = data.Lat,
                 Lng = data.Lng,
+                SentAtUtc = sentAtUtc,
                 CreatedAt = now
             });
 
@@ -189,7 +193,8 @@ namespace VehicleDiag.Api.Services
                         VehicleId = vehicle.VehicleId,
                         DtcCode = d.DtcCode,
                         StatusByte = (byte)d.StatusByte,
-                        LastSeenAt = now
+                        LastSeenAt = now,
+                        SentAtUtc = sentAtUtc
                     });
                 }
 
@@ -203,7 +208,8 @@ namespace VehicleDiag.Api.Services
                         DtcCode = d.DtcCode,
                         StatusByte = (byte)d.StatusByte,
                         FirstSeenAt = now,
-                        LastSeenAt = now
+                        LastSeenAt = now,
+                        SentAtUtc = sentAtUtc
                     });
                 }
             }
@@ -251,9 +257,18 @@ namespace VehicleDiag.Api.Services
 
             await db.SaveChangesAsync();
         }
-        private async Task HandleHeartbeat(string deviceId, AppDbContext db)
+        private async Task HandleHeartbeat(string deviceId, string payload, AppDbContext db)
         {
             Console.WriteLine($"[Heartbeat] Device={deviceId}");
+
+            var data = JsonSerializer.Deserialize<HeartbeatPayload>(
+                payload,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+            var sentAtUtc = ParsePayloadTimeUtc(data?.MqttTime);
 
             var device = await db.Devices
                 .FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.IsActive);
@@ -265,8 +280,26 @@ namespace VehicleDiag.Api.Services
             }
 
             device.LastSeenAt = DateTime.UtcNow;
+            device.LastHeartbeatSentAtUtc = sentAtUtc;
 
             await db.SaveChangesAsync();
+        }
+
+        private static DateTime? ParsePayloadTimeUtc(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            if (!DateTimeOffset.TryParse(
+                    raw,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal,
+                    out var dto))
+            {
+                return null;
+            }
+
+            return dto.UtcDateTime;
         }
         // =========================================================
         // SESSION RESULT
@@ -419,6 +452,13 @@ namespace VehicleDiag.Api.Services
             public double Lat { get; set; }
             public double Lng { get; set; }
             public List<DtcPayload>? Dtcs { get; set; }
+            public string? MqttTime { get; set; }
+        }
+
+        public class HeartbeatPayload
+        {
+            public string? Type { get; set; }
+            public string? MqttTime { get; set; }
         }
 
         public class DtcPayload

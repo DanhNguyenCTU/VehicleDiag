@@ -14,6 +14,8 @@
 
         public DateTime LastSeenAt { get; set; }
 
+        public DateTime? SentAtUtc { get; set; }
+
         public DateTime? ClearedAt { get; set; }
 
         public Vehicle Vehicle { get; set; } = null!;

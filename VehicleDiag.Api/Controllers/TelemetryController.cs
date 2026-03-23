@@ -61,6 +61,30 @@ namespace VehicleDiag.Api.Controllers
             return dto.UtcDateTime;
         }
 
+        [HttpGet("history")]
+        public async Task<IActionResult> GetHistory(
+    [FromQuery] string deviceId,
+    [FromQuery] DateTime from,
+    [FromQuery] DateTime to)
+        {
+            from = from.ToUniversalTime();
+            to = to.ToUniversalTime();
+            var data = await _db.Telemetry
+                .Where(x => x.DeviceId == deviceId
+                         && x.CreatedAt >= from
+                         && x.CreatedAt <= to)
+                .OrderBy(x => x.CreatedAt)
+                .Select(x => new
+                {
+                    x.Lat,
+                    x.Lng,
+                    x.CreatedAt
+                })
+                .ToListAsync();
+
+            return Ok(data);
+        }
+
         [HttpPost]
         public async Task<IActionResult> Submit([FromBody] TelemetryRequest req)
         {

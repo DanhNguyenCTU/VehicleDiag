@@ -66,8 +66,6 @@ public class DiagnosticRecordsController : ControllerBase
             CapturedAt = capturedAt,
             RecordType = recordType,
             DeviceId = vehicle.DeviceId,
-            EcuId = req.EcuId,
-            EcuName = string.IsNullOrWhiteSpace(req.EcuName) ? null : req.EcuName.Trim(),
             CreatedByUserId = int.Parse(userIdStr),
             Status = SessionStatus.Completed,
             Protocol = protocol,
@@ -152,8 +150,6 @@ public class DiagnosticRecordsController : ControllerBase
                 x.CapturedAt,
                 x.Status,
                 x.Protocol,
-                x.EcuId,
-                x.EcuName,
                 x.DeviceId,
                 x.VehicleId,
                 x.CreatedByUserId
@@ -179,8 +175,7 @@ public class DiagnosticRecordsController : ControllerBase
                 x.SavedAt,
                 x.CapturedAt,
                 x.Status,
-                x.Protocol,
-                x.EcuName
+                x.Protocol
             })
             .ToListAsync();
 

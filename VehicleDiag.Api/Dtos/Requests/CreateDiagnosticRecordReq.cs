@@ -7,8 +7,6 @@ public class CreateDiagnosticRecordReq
     public int VehicleId { get; set; }
     public string RecordType { get; set; } = "";
     public string? Protocol { get; set; }
-    public int? EcuId { get; set; }
-    public string? EcuName { get; set; }
     public DateTime? CapturedAt { get; set; }
     public List<CreateDiagnosticRecordDtcReq>? Dtcs { get; set; }
     public List<CreateDiagnosticRecordInfoReq>? Info { get; set; }

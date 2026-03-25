@@ -6,7 +6,6 @@ using VehicleDiag.Api.Constants;
 using VehicleDiag.Api.Data;
 using VehicleDiag.Api.Dtos;
 using VehicleDiag.Api.Dtos.Requests;
-using VehicleDiag.Api.Models;
 using VehicleDiag.Api.Services;
 
 namespace VehicleDiag.Api.Controllers;
@@ -25,15 +24,10 @@ public class SessionsController : ControllerBase
         _mqtt = mqtt;
     }
 
-    // =========================================================
-    // UI → CREATE SESSION
-    // =========================================================
-
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateSessionReq req)
     {
         var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-
         if (userIdStr == null)
             return Unauthorized();
 
@@ -47,84 +41,66 @@ public class SessionsController : ControllerBase
         if (string.IsNullOrWhiteSpace(vehicle.DeviceId))
             return BadRequest("Vehicle has no device");
 
-        string action = req.ActionType?.Trim().ToUpper() ?? "";
+        var recordType = NormalizeRecordType(req.ActionType);
+        if (!DiagnosticRecordType.IsValid(recordType))
+            return BadRequest("Invalid RecordType");
 
-        if (action == "READ_INFO") action = SessionActionType.READ_INFO;
-        else if (action == "READ_DTC") action = SessionActionType.READ_DTC;
-        else if (action == "CLEAR_DTC") action = SessionActionType.CLEAR_DTC;
-
-        if (action != SessionActionType.READ_INFO &&
-            action != SessionActionType.READ_DTC &&
-            action != SessionActionType.CLEAR_DTC)
-            return BadRequest("Invalid ActionType");
-
-        string protocol = string.IsNullOrWhiteSpace(req.Protocol)
+        var protocol = string.IsNullOrWhiteSpace(req.Protocol)
             ? "OBDII"
-            : req.Protocol.Trim().ToUpper();
+            : req.Protocol.Trim().ToUpperInvariant();
 
         if (protocol != "OBDII" && protocol != "KWP")
             return BadRequest("Invalid protocol");
 
-        var session = new EcuReadSession
+        var record = new Models.DiagnosticRecord
         {
-            CreatedAt = DateTime.UtcNow,
-            ActionType = action,
-            DeviceId = vehicle.DeviceId!,
+            SavedAt = DateTime.UtcNow,
+            RecordType = recordType,
+            DeviceId = vehicle.DeviceId,
             VehicleId = vehicle.VehicleId,
             Protocol = protocol,
             CreatedByUserId = int.Parse(userIdStr),
             Status = SessionStatus.Pending
         };
 
-        _db.EcuReadSessions.Add(session);
+        _db.DiagnosticRecords.Add(record);
         await _db.SaveChangesAsync();
 
-        // ======================================================
-        // Publish command to ESP32 via MQTT
-        // ======================================================
-
         await _mqtt.PublishCommand(
-            session.DeviceId,
+            record.DeviceId!,
             new
             {
-                sessionId = session.SessionId,
-                actionType = session.ActionType,
-                protocol = session.Protocol,
+                sessionId = record.RecordId,
+                actionType = ToCommandAction(record.RecordType),
+                protocol = record.Protocol,
                 brand = vehicle.VehicleModel?.Brand,
                 model = vehicle.VehicleModel?.Model,
                 year = vehicle.VehicleModel?.Year
             });
 
-        session.Status = SessionStatus.Processing;
-
+        record.Status = SessionStatus.Processing;
         await _db.SaveChangesAsync();
 
-        return Ok(new { SessionId = session.SessionId });
+        return Ok(new { SessionId = record.RecordId, RecordId = record.RecordId });
     }
 
-    // =========================================================
-    // UI → GET SESSION DTCs
-    // =========================================================
     [HttpGet("{sessionId:int}/dtcs")]
     public async Task<IActionResult> GetSessionDtcs(int sessionId)
     {
-        var session = await _db.EcuReadSessions
-            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+        var record = await _db.DiagnosticRecords
+            .FirstOrDefaultAsync(x => x.RecordId == sessionId);
 
-        if (session == null)
+        if (record == null)
             return NotFound("Session not found");
 
-        if (!string.Equals(session.Status,
-            SessionStatus.Completed,
-            StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(record.Status, SessionStatus.Completed, StringComparison.OrdinalIgnoreCase))
             return BadRequest("Session not completed");
 
         var dtcs = await (
-            from r in _db.EcuDtcResults
-            join d in _db.DtcDictionary
-                on r.DtcCode equals d.DtcCode into dict
+            from r in _db.DiagnosticRecordDtcs
+            join d in _db.DtcDictionary on r.DtcCode equals d.DtcCode into dict
             from d in dict.DefaultIfEmpty()
-            where r.SessionId == sessionId
+            where r.RecordId == sessionId
             orderby r.Id
             select new
             {
@@ -138,26 +114,20 @@ public class SessionsController : ControllerBase
         return Ok(dtcs);
     }
 
-    // =========================================================
-    // UI → GET SESSION INFO
-    // =========================================================
-
     [HttpGet("{sessionId:int}/info")]
     public async Task<IActionResult> GetSessionInfo(int sessionId)
     {
-        var session = await _db.EcuReadSessions
-            .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+        var record = await _db.DiagnosticRecords
+            .FirstOrDefaultAsync(x => x.RecordId == sessionId);
 
-        if (session == null)
+        if (record == null)
             return NotFound("Session not found");
 
-        if (!string.Equals(session.Status,
-            SessionStatus.Completed,
-            StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(record.Status, SessionStatus.Completed, StringComparison.OrdinalIgnoreCase))
             return BadRequest("Session not completed");
 
-        var info = await _db.EcuInfoResults
-            .Where(x => x.SessionId == sessionId)
+        var info = await _db.DiagnosticRecordInfos
+            .Where(x => x.RecordId == sessionId)
             .OrderBy(x => x.Id)
             .Select(x => new
             {
@@ -169,27 +139,25 @@ public class SessionsController : ControllerBase
         return Ok(info);
     }
 
-    // =========================================================
-    // UI → SESSION STATUS
-    // =========================================================
-
     public record SessionStatusDto(
         int SessionId,
         string Status,
         DateTime CreatedAt,
-        DateTime? CompletedAt
+        DateTime? CompletedAt,
+        string? RecordType
     );
 
     [HttpGet("{sessionId:int}/status")]
     public async Task<IActionResult> GetSessionStatus(int sessionId)
     {
-        var session = await _db.EcuReadSessions
-            .Where(x => x.SessionId == sessionId)
+        var session = await _db.DiagnosticRecords
+            .Where(x => x.RecordId == sessionId)
             .Select(x => new SessionStatusDto(
-                x.SessionId,
-                x.Status,
-                x.CreatedAt,
-                x.CompletedAt
+                x.RecordId,
+                x.Status ?? SessionStatus.Pending,
+                x.SavedAt,
+                x.CapturedAt,
+                x.RecordType
             ))
             .FirstOrDefaultAsync();
 
@@ -202,14 +170,14 @@ public class SessionsController : ControllerBase
     [HttpGet("{sessionId:int}/freeze-frame")]
     public async Task<IActionResult> GetFreezeFrame(int sessionId)
     {
-        var data = await _db.FreezeFrames
-            .Where(x => x.SessionId == sessionId)
+        var data = await _db.DiagnosticRecordFreezeFrames
+            .Where(x => x.RecordId == sessionId)
             .Select(x => new FreezeFrameDto
             {
-                Dtc = x.Dtc,
-                Rpm = x.Rpm,
-                Speed = x.Speed,
-                Coolant = x.Coolant
+                Dtc = x.Dtc ?? string.Empty,
+                Rpm = x.Rpm ?? 0,
+                Speed = x.Speed ?? 0,
+                Coolant = x.Coolant ?? 0
             })
             .FirstOrDefaultAsync();
 
@@ -217,5 +185,35 @@ public class SessionsController : ControllerBase
             return NotFound();
 
         return Ok(data);
+    }
+
+    private static string NormalizeRecordType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var normalized = value.Trim()
+            .Replace("-", "_")
+            .Replace(" ", "_")
+            .ToUpperInvariant();
+
+        return normalized switch
+        {
+            "READINFO" => DiagnosticRecordType.READ_INFO,
+            "READ_INFO" => DiagnosticRecordType.READ_INFO,
+            "READDTC" => DiagnosticRecordType.READ_DTC,
+            "READ_DTC" => DiagnosticRecordType.READ_DTC,
+            _ => string.Empty
+        };
+    }
+
+    private static string ToCommandAction(string? recordType)
+    {
+        return DiagnosticRecordType.Normalize(recordType) switch
+        {
+            DiagnosticRecordType.READ_INFO => SessionActionType.READ_INFO,
+            DiagnosticRecordType.READ_DTC => SessionActionType.READ_DTC,
+            _ => string.Empty
+        };
     }
 }

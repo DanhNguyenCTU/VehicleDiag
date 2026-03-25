@@ -16,14 +16,14 @@ public class AppDbContext : DbContext
     public DbSet<Ecu> Ecus => Set<Ecu>();
     public DbSet<EcuProtocol> EcuProtocols => Set<EcuProtocol>();
     public DbSet<ManufacturerBrand> ManufacturerBrands => Set<ManufacturerBrand>();
-    public DbSet<EcuReadSession> EcuReadSessions => Set<EcuReadSession>();
-    public DbSet<EcuInfoResult> EcuInfoResults => Set<EcuInfoResult>();
-    public DbSet<EcuDtcResult> EcuDtcResults => Set<EcuDtcResult>();
+    public DbSet<DiagnosticRecord> DiagnosticRecords => Set<DiagnosticRecord>();
+    public DbSet<DiagnosticRecordInfo> DiagnosticRecordInfos => Set<DiagnosticRecordInfo>();
+    public DbSet<DiagnosticRecordDtc> DiagnosticRecordDtcs => Set<DiagnosticRecordDtc>();
     public DbSet<EcuDtcHistory> EcuDtcHistory => Set<EcuDtcHistory>();
     public DbSet<EcuDtcCurrent> EcuDtcCurrent => Set<EcuDtcCurrent>();
     public DbSet<DtcDictionary> DtcDictionary => Set<DtcDictionary>();
     public DbSet<UserVehicle> UserVehicles => Set<UserVehicle>();
-    public DbSet<FreezeFrame> FreezeFrames => Set<FreezeFrame>();
+    public DbSet<DiagnosticRecordFreezeFrame> DiagnosticRecordFreezeFrames => Set<DiagnosticRecordFreezeFrame>();
 
     public DbSet<DtcLog> DtcLogs { get; set; }
 
@@ -62,16 +62,16 @@ public class AppDbContext : DbContext
             .ToTable("EcuProtocol")
             .HasKey(x => x.Id);
 
-        modelBuilder.Entity<EcuReadSession>()
-            .ToTable("EcuReadSession")
-            .HasKey(x => x.SessionId);
+        modelBuilder.Entity<DiagnosticRecord>()
+            .ToTable("DiagnosticRecord")
+            .HasKey(x => x.RecordId);
 
-        modelBuilder.Entity<EcuInfoResult>()
-            .ToTable("EcuInfoResult")
+        modelBuilder.Entity<DiagnosticRecordInfo>()
+            .ToTable("DiagnosticRecordInfo")
             .HasKey(x => x.Id);
 
-        modelBuilder.Entity<EcuDtcResult>()
-            .ToTable("EcuDtcResult")
+        modelBuilder.Entity<DiagnosticRecordDtc>()
+            .ToTable("DiagnosticRecordDtc")
             .HasKey(x => x.Id);
         modelBuilder.Entity<EcuDtcHistory>()
             .ToTable("EcuDtcHistory")
@@ -81,8 +81,8 @@ public class AppDbContext : DbContext
             .ToTable("EcuDtcCurrent")
             .HasKey(x => new { x.VehicleId, x.DtcCode });
 
-        modelBuilder.Entity<FreezeFrame>()
-            .ToTable("FreezeFrame")
+        modelBuilder.Entity<DiagnosticRecordFreezeFrame>()
+            .ToTable("DiagnosticRecordFreezeFrame")
             .HasKey(x => x.Id);
 
         modelBuilder.Entity<DtcDictionary>()

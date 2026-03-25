@@ -246,9 +246,9 @@ namespace VehicleDiag.Api.Services
             if (data == null)
                 return;
 
-            db.FreezeFrames.Add(new FreezeFrame
+            db.DiagnosticRecordFreezeFrames.Add(new DiagnosticRecordFreezeFrame
             {
-                SessionId = sessionId,
+                RecordId = sessionId,
                 Dtc = data.Dtc,
                 Rpm = data.Rpm,
                 Speed = data.Speed,
@@ -334,11 +334,11 @@ namespace VehicleDiag.Api.Services
             {
                 Console.WriteLine($"   -> {d.DtcCode}");
 
-                db.EcuDtcResults.Add(new EcuDtcResult
+                db.DiagnosticRecordDtcs.Add(new DiagnosticRecordDtc
                 {
-                    SessionId = sessionId,
+                    RecordId = sessionId,
                     DtcCode = d.DtcCode,
-                    StatusByte = (byte)d.StatusByte,
+                    StatusByte = d.StatusByte,
                     Protocol = data.Protocol ?? "OBDII"
                 });
             }
@@ -375,8 +375,8 @@ namespace VehicleDiag.Api.Services
                 return;
             }
 
-            var session = await db.EcuReadSessions
-                .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+            var session = await db.DiagnosticRecords
+                .FirstOrDefaultAsync(x => x.RecordId == sessionId);
 
             if (session == null)
             {
@@ -391,9 +391,9 @@ namespace VehicleDiag.Api.Services
 
                 Console.WriteLine($"   -> {key} = {val}");
 
-                db.EcuInfoResults.Add(new EcuInfoResult
+                db.DiagnosticRecordInfos.Add(new DiagnosticRecordInfo
                 {
-                    SessionId = sessionId,
+                    RecordId = sessionId,
                     InfoKey = key,
                     InfoLabel = key,
                     InfoValue = val
@@ -426,8 +426,8 @@ namespace VehicleDiag.Api.Services
 
             Console.WriteLine($"[Session] COMPLETE session={sessionId}");
 
-            var session = await db.EcuReadSessions
-                .FirstOrDefaultAsync(x => x.SessionId == sessionId);
+            var session = await db.DiagnosticRecords
+                .FirstOrDefaultAsync(x => x.RecordId == sessionId);
 
             if (session == null)
             {
@@ -436,7 +436,7 @@ namespace VehicleDiag.Api.Services
             }
 
             session.Status = SessionStatus.Completed;
-            session.CompletedAt = DateTime.UtcNow;
+            session.CapturedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
 

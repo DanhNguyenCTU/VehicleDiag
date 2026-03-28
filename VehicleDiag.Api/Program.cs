@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Npgsql;
 using System.Text;
 using VehicleDiag.Api.Data;
 using VehicleDiag.Api.Services;
@@ -54,7 +55,17 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
     if (string.IsNullOrEmpty(conn))
         throw new Exception("Database connection string missing");
 
-    opt.UseNpgsql(conn);
+    var csb = new NpgsqlConnectionStringBuilder(conn);
+
+    // Render often talks to a managed Postgres pooler (session mode).
+    // Keep the app-side pool conservative so we do not exceed the upstream pool_size.
+    if (!csb.ContainsKey("Maximum Pool Size") || csb.MaxPoolSize <= 0)
+        csb.MaxPoolSize = 5;
+
+    if (!csb.ContainsKey("Timeout") || csb.Timeout <= 0)
+        csb.Timeout = 15;
+
+    opt.UseNpgsql(csb.ConnectionString);
 });
 Console.WriteLine("AddDbContext registered successfully");
 
@@ -94,7 +105,10 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
+if (app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAuthentication();
 app.UseAuthorization();
